@@ -65,7 +65,7 @@ type ExchangeClient interface {
 	Candles1mByDate(symbol string, date time.Time) (CandleBundle, error)
 	Candles5mByDate(symbol string, date time.Time) (CandleBundle, error)
 	CandlesLast24h() ([]CandleBundle, error)
-	//Candles(symbol string, start time.Time, end time.Time, interval Interval) (CandleBundle, error)
+	Candles(symbol string, start time.Time, end time.Time, interval Interval) (CandleBundle, error)
 }
 
 func intervalDuration(interval Interval) time.Duration {

@@ -2,7 +2,7 @@ package exchange
 
 import (
 	"fmt"
-	"karasu/exchange/bitvavo"
+	"karasu/internal/exchange/bitvavo"
 	"log/slog"
 	"os"
 	"strconv"

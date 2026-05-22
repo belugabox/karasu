@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"karasu/exchange"
+	"karasu/internal/exchange"
 	"log/slog"
 	"net/http"
 	"time"
@@ -19,11 +19,10 @@ func newRouter() *gin.Engine {
 	router := gin.New()
 
 	router.Use(sloggin.NewWithConfig(slog.Default(), sloggin.Config{
-		WithSpanID:  true,
-		WithTraceID: true,
+		DefaultLevel: slog.LevelDebug,
 	}))
 
-	router.GET("/ping", func(c *gin.Context) {
+	router.GET("/api/markets", func(c *gin.Context) {
 		exchangeClient, err := exchange.NewBitvavoClient()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -38,6 +37,10 @@ func newRouter() *gin.Engine {
 		slog.Info("top market positions", "markets", markets)
 		c.JSON(http.StatusOK, markets)
 	})
+
+	// Serve the embedded React/Vite frontend for all non-API routes
+	router.NoRoute(gin.WrapH(spaFileServer()))
+
 	return router
 }
 

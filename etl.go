@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"karasu/exchange"
+	"karasu/internal/exchange"
 	"log/slog"
 )
 

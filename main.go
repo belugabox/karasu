@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"time"
 
+	"karasu/internal/scheduler"
+
 	"github.com/dpotapov/slogpfx"
 	"github.com/joho/godotenv"
 	"github.com/phsym/console-slog"
@@ -35,14 +37,14 @@ func main() {
 	}
 
 	// run scheduler
-	scheduler, err := newScheduler()
+	s, err := scheduler.NewScheduler()
 	if err != nil {
 		slog.Error("failed to create scheduler", "err", err)
 		return
 	}
-	addJob(scheduler, "ETL Task", 60*time.Second, launcheETL)
-	defer scheduler.Shutdown()
-	scheduler.Start()
+	//s.AddJob("ETL Task", 60*time.Second, launcheETL)
+	defer s.Stop()
+	s.Start()
 
 	// run http server
 	srv := newHTTPServer(os.Getenv("PORT"), newRouter())
