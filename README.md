@@ -64,3 +64,44 @@ go run .
 
 Le programme initialise le schema, insere un point de prix de demonstration, puis lit les 5 derniers points.
 Il insere aussi une bougie OHLCV de demonstration et charge les bougies sur un intervalle de temps.
+
+## Ingestion live 1m + stockage 5m
+
+Le backend execute des jobs planifies:
+
+- `refresh universe` toutes les 15 min (univers EUR + top symbols)
+- `ingest top symbols` toutes les 1 min (cache live 1m + persistance 5m)
+- `ingest other symbols` toutes les 5 min (rotation par batch)
+
+Principes:
+
+- Les bougies 1m sont maintenues en memoire pour le direct frontend (`/api/live-1m`)
+- Les bougies 5m closes sont agregees et upsertees en SQLite (`crypto_candles`)
+- Contrainte d'unicite: `(exchange, symbol, timeframe, open_time)`
+
+Variable d'environnement:
+
+- `KARASU_DB_PATH` (optionnel, defaut: `./karasu.db`)
+- `KARASU_REFRESH_UNIVERSE_INTERVAL` (optionnel, defaut: `15m`)
+- `KARASU_INGEST_TOP_INTERVAL` (optionnel, defaut: `1m`)
+- `KARASU_INGEST_OTHER_INTERVAL` (optionnel, defaut: `5m`)
+- `KARASU_INGEST_REPAIR_LOOKBACK` (optionnel, defaut: `6h`)
+- `KARASU_BACKFILL_CHUNK` (optionnel, defaut: `12h`)
+
+Les durees utilisent le format Go (`30s`, `1m`, `5m`, `1h`).
+
+## API
+
+- `GET /api/markets`
+	- top marchés classes (liquidite/momentum)
+
+- `GET /api/live-1m?symbols=BTC,ETH&limit=20`
+	- retourne le dernier snapshot 1m en memoire
+
+- `GET /api/candles-5m?symbol=BTC&limit=500`
+	- retourne l'historique 5m persiste (ordre chronologique)
+
+- `POST /api/backfill-5m?symbols=BTC,ETH&from=2026-05-01T00:00:00Z&to=2026-05-22T00:00:00Z`
+	- lance un backfill longue plage en agregant du 1m vers 5m
+	- `from` et `to` acceptent RFC3339 ou unix milliseconds
+	- si `symbols` est omis, le backfill cible tout l'univers courant
