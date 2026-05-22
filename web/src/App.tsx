@@ -54,7 +54,31 @@ type ChartWindow = {
   label: string
 }
 
-type AppTab = 'overview' | 'markets' | 'backtest'
+type BackfillJobReport = {
+  symbols: number
+  chunks: number
+  fetched1mCandles: number
+  aggregated5m: number
+  filtered5m: number
+  persisted5m: number
+  durationMs: number
+}
+
+type BackfillJob = {
+  id: string
+  symbols: string[]
+  from: string
+  to: string
+  reason: string
+  state: string
+  createdAt: string
+  startedAt?: string
+  endedAt?: string
+  report?: BackfillJobReport
+  error?: string
+}
+
+type AppTab = 'overview' | 'markets' | 'backtest' | 'tasks'
 
 const chartWindows: ChartWindow[] = [
   { candles: 48, label: '4h' },
@@ -129,6 +153,52 @@ function normalizeCandle(raw: unknown): Candle {
 
 function formatNumber(value: unknown, decimals: number): string {
   return toNumber(value).toFixed(decimals)
+}
+
+function normalizeBackfillJob(raw: unknown): BackfillJob {
+  const r = (raw as Record<string, unknown>) || {}
+  const reportRaw = ((r.report as Record<string, unknown> | undefined) || {}) as Record<string, unknown>
+  return {
+    id: toStringValue(r.id),
+    symbols: Array.isArray(r.symbols)
+      ? r.symbols.map((s) => toStringValue(s)).filter((s) => s.length > 0)
+      : [],
+    from: toStringValue(r.from),
+    to: toStringValue(r.to),
+    reason: toStringValue(r.reason),
+    state: toStringValue(r.state),
+    createdAt: toStringValue(r.createdAt),
+    startedAt: toStringValue(r.startedAt) || undefined,
+    endedAt: toStringValue(r.endedAt) || undefined,
+    error: toStringValue(r.error) || undefined,
+    report: r.report
+      ? {
+          symbols: toNumber(reportRaw.symbols),
+          chunks: toNumber(reportRaw.chunks),
+          fetched1mCandles: toNumber(reportRaw.fetched1mCandles),
+          aggregated5m: toNumber(reportRaw.aggregated5m),
+          filtered5m: toNumber(reportRaw.filtered5m),
+          persisted5m: toNumber(reportRaw.persisted5m),
+          durationMs: toNumber(reportRaw.durationMs),
+        }
+      : undefined,
+  }
+}
+
+function formatDurationMs(value: number): string {
+  if (!Number.isFinite(value) || value < 0) {
+    return '-'
+  }
+  if (value < 1000) {
+    return `${Math.round(value)}ms`
+  }
+  const sec = value / 1000
+  if (sec < 60) {
+    return `${sec.toFixed(1)}s`
+  }
+  const min = Math.floor(sec / 60)
+  const remSec = Math.round(sec % 60)
+  return `${min}m ${remSec}s`
 }
 
 function Sparkline({ values, stroke, fill, height = 72, label }: SparklineProps) {
@@ -332,6 +402,8 @@ function App() {
   const [isBacktesting, setIsBacktesting] = useState(false)
   const [backtestMessage, setBacktestMessage] = useState<string>('')
   const [activeTab, setActiveTab] = useState<AppTab>('overview')
+  const [backfillJobs, setBackfillJobs] = useState<BackfillJob[]>([])
+  const [jobsLoading, setJobsLoading] = useState(false)
 
   const topSymbols = useMemo(
     () => markets.slice(0, 20).map((m) => m.symbol),
@@ -458,6 +530,45 @@ function App() {
     setHoveredChartIndex(null)
   }, [selectedSymbol, chartWindow])
 
+  useEffect(() => {
+    if (activeTab !== 'tasks' && !isBacktesting) {
+      return
+    }
+
+    let cancelled = false
+
+    const loadBackfillJobs = async () => {
+      setJobsLoading(true)
+      try {
+        const params = new URLSearchParams({ limit: '80' })
+        const res = await fetch(`/api/backfill-jobs?${params.toString()}`)
+        if (!res.ok) {
+          throw new Error(`api error (${res.status})`)
+        }
+        const body = (await res.json()) as { jobs?: unknown[] }
+        const jobs = Array.isArray(body.jobs) ? body.jobs.map(normalizeBackfillJob) : []
+        if (!cancelled) {
+          setBackfillJobs(jobs)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'failed to load backfill jobs')
+        }
+      } finally {
+        if (!cancelled) {
+          setJobsLoading(false)
+        }
+      }
+    }
+
+    loadBackfillJobs()
+    const id = window.setInterval(loadBackfillJobs, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [activeTab, isBacktesting])
+
   const handleBacktest = async () => {
     setIsBacktesting(true)
     setBacktestMessage('')
@@ -484,6 +595,8 @@ function App() {
       if (!jobId) {
         throw new Error('missing backfill job id')
       }
+
+      setActiveTab('tasks')
 
       setBacktestMessage(`Backfill en cours pour ${selectedSymbol}... (job: ${jobId})`)
 
@@ -557,6 +670,9 @@ function App() {
     ? Math.min(...selectedChartCandles.map((candle) => candle.low))
     : 0
   const chartVolume = selectedChartCandles.reduce((total, candle) => total + candle.volume, 0)
+  const runningJobs = backfillJobs.filter((job) => job.state === 'running' || job.state === 'queued')
+  const completedJobs = backfillJobs.filter((job) => job.state === 'done')
+  const failedJobs = backfillJobs.filter((job) => job.state === 'failed')
 
   return (
     <main className="app-shell">
@@ -602,6 +718,13 @@ function App() {
           onClick={() => setActiveTab('backtest')}
         >
           Backtesting
+        </button>
+        <button
+          type="button"
+          className={activeTab === 'tasks' ? 'tab-button active' : 'tab-button'}
+          onClick={() => setActiveTab('tasks')}
+        >
+          Tâches
         </button>
       </nav>
 
@@ -814,6 +937,80 @@ function App() {
               {activeChartCandle ? new Date(activeChartCandle.openTime).toLocaleString() : '-'}
             </strong>
           </div>
+        </div>
+      </section>
+      )}
+
+      {activeTab === 'tasks' && (
+      <section className="panel tasks-panel">
+        <div className="tasks-head">
+          <div>
+            <h3>Tâches backfill</h3>
+            <p>Jobs en cours, terminés, en erreur avec durées et détails d&apos;exécution.</p>
+          </div>
+          <span>{jobsLoading ? 'Actualisation...' : `${backfillJobs.length} tâches`}</span>
+        </div>
+
+        <div className="tasks-kpis">
+          <div>
+            <span>En cours</span>
+            <strong>{runningJobs.length}</strong>
+          </div>
+          <div>
+            <span>Terminées</span>
+            <strong>{completedJobs.length}</strong>
+          </div>
+          <div>
+            <span>En erreur</span>
+            <strong>{failedJobs.length}</strong>
+          </div>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Job</th>
+                <th>État</th>
+                <th>Symboles</th>
+                <th>Créée</th>
+                <th>Début</th>
+                <th>Fin</th>
+                <th>Durée</th>
+                <th>Détails</th>
+              </tr>
+            </thead>
+            <tbody>
+              {backfillJobs.map((job) => {
+                const startedMs = job.startedAt ? Date.parse(job.startedAt) : 0
+                const endedMs = job.endedAt ? Date.parse(job.endedAt) : 0
+                const durationMs =
+                  job.report?.durationMs ??
+                  (startedMs > 0 ? (endedMs > 0 ? endedMs - startedMs : Date.now() - startedMs) : 0)
+
+                return (
+                  <tr key={job.id}>
+                    <td>{job.id}</td>
+                    <td>
+                      <span className={`job-state ${job.state}`}>{job.state}</span>
+                    </td>
+                    <td>{job.symbols.join(', ') || '-'}</td>
+                    <td>{job.createdAt ? new Date(job.createdAt).toLocaleString() : '-'}</td>
+                    <td>{job.startedAt ? new Date(job.startedAt).toLocaleString() : '-'}</td>
+                    <td>{job.endedAt ? new Date(job.endedAt).toLocaleString() : '-'}</td>
+                    <td>{formatDurationMs(durationMs)}</td>
+                    <td className="task-details-cell">
+                      {job.error
+                        ? `Erreur: ${job.error}`
+                        : job.report
+                          ? `5m persistées: ${job.report.persisted5m} | 1m fetch: ${job.report.fetched1mCandles} | chunks: ${job.report.chunks}`
+                          : job.reason || '-'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       </section>
       )}
