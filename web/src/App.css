@@ -12,6 +12,38 @@
   margin-bottom: 20px;
 }
 
+.tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.tab-button {
+  border: 1px solid var(--stroke);
+  background: #f8fafc;
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.tab-button:hover {
+  transform: translateY(-1px);
+  border-color: #94a3b8;
+}
+
+.tab-button.active {
+  color: #ffffff;
+  background: linear-gradient(135deg, #334155, #0f172a);
+  border-color: transparent;
+}
+
 .eyebrow {
   margin: 0;
   text-transform: uppercase;
@@ -282,6 +314,7 @@ h1 {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
 }
 
 .range-button {
@@ -307,6 +340,49 @@ h1 {
   color: #ffffff;
   background: linear-gradient(135deg, #2563eb, #0f766e);
   border-color: transparent;
+}
+
+.backtest-button {
+  border: 1px solid #059669;
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #ffffff;
+  border-radius: 999px;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-weight: 500;
+  transition:
+    transform 120ms ease,
+    opacity 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.backtest-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+}
+
+.backtest-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.backtest-message {
+  padding: 12px 14px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+}
+
+.backtest-message.success {
+  background: #ecfdf5;
+  color: #047857;
+  border-left: 3px solid #10b981;
+}
+
+.backtest-message.error {
+  background: #fef2f2;
+  color: #dc2626;
+  border-left: 3px solid #ef4444;
 }
 
 .backtest-stats,

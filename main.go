@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"karasu/internal/exchange"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -11,29 +10,29 @@ import (
 	"syscall"
 	"time"
 
+	karasuapi "karasu/internal/api"
+	"karasu/internal/exchange"
+	"karasu/internal/ingestion"
 	"karasu/internal/scheduler"
+	"karasu/internal/store"
 
 	"github.com/dpotapov/slogpfx"
 	"github.com/joho/godotenv"
-	"github.com/phsym/console-slog"
+	console "github.com/phsym/console-slog"
 )
 
 func main() {
-	// capture interrupt signals to allow for graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// time
 	time.Local = time.UTC
 
-	// slog
-	console := console.NewHandler(os.Stderr, &console.HandlerOptions{Level: slog.LevelDebug})
-	consoleWithPrefix := slogpfx.NewHandler(console, &slogpfx.HandlerOptions{
+	consoleHandler := console.NewHandler(os.Stderr, &console.HandlerOptions{Level: slog.LevelDebug})
+	consoleWithPrefix := slogpfx.NewHandler(consoleHandler, &slogpfx.HandlerOptions{
 		PrefixKeys: []string{"task"},
 	})
 	slog.SetDefault(slog.New(consoleWithPrefix))
 
-	// load config
 	if err := godotenv.Load(".env"); err != nil {
 		slog.Error("no .env file found, relying on environment variables", "err", err)
 		return
@@ -45,14 +44,14 @@ func main() {
 		return
 	}
 
-	store, err := NewCandleStore(os.Getenv("KARASU_DB_PATH"))
+	candleStore, err := store.NewSQLiteStore(os.Getenv("KARASU_DB_PATH"))
 	if err != nil {
 		slog.Error("failed to initialize candle store", "err", err)
 		return
 	}
-	defer store.Close()
+	defer candleStore.Close()
 
-	ingestionService := NewIngestionService(exchangeClient, store)
+	ingestionService := ingestion.NewIngestionService(exchangeClient, candleStore)
 	if err := ingestionService.RefreshUniverse(); err != nil {
 		slog.Warn("initial universe refresh failed", "err", err)
 	}
@@ -70,6 +69,11 @@ func main() {
 	otherSymbolsInterval, err := durationFromEnv("KARASU_INGEST_OTHER_INTERVAL", 5*time.Minute)
 	if err != nil {
 		slog.Error("invalid scheduler interval", "env", "KARASU_INGEST_OTHER_INTERVAL", "err", err)
+		return
+	}
+	gapRepairInterval, err := durationFromEnv("KARASU_GAP_REPAIR_INTERVAL", 3*time.Minute)
+	if err != nil {
+		slog.Error("invalid scheduler interval", "env", "KARASU_GAP_REPAIR_INTERVAL", "err", err)
 		return
 	}
 	repairLookback, err := durationFromEnv("KARASU_INGEST_REPAIR_LOOKBACK", 6*time.Hour)
@@ -91,7 +95,6 @@ func main() {
 		return
 	}
 
-	// run scheduler
 	s, err := scheduler.NewScheduler()
 	if err != nil {
 		slog.Error("failed to create scheduler", "err", err)
@@ -109,22 +112,27 @@ func main() {
 		slog.Error("failed to add scheduler job", "job", "ingest other symbols", "err", err)
 		return
 	}
+	if err := s.AddJob("repair gaps", gapRepairInterval, ingestionService.RepairDetectedGaps); err != nil {
+		slog.Error("failed to add scheduler job", "job", "repair gaps", "err", err)
+		return
+	}
 	slog.Info(
 		"scheduler intervals configured",
 		"refreshUniverse", refreshUniverseInterval.String(),
 		"ingestTop", topSymbolsInterval.String(),
 		"ingestOther", otherSymbolsInterval.String(),
+		"repairGaps", gapRepairInterval.String(),
 		"repairLookback", repairLookback.String(),
 		"backfillChunk", backfillChunk.String(),
 	)
 	defer s.Stop()
 	s.Start()
 
-	// run http server
-	srv := newHTTPServer(os.Getenv("PORT"), newRouter(exchangeClient, ingestionService, store))
+	router := karasuapi.NewRouter(exchangeClient, ingestionService, candleStore, spaFileServer())
+	srv := karasuapi.NewHTTPServer(os.Getenv("PORT"), router)
 
 	slog.Info("services started", "url", "http://localhost"+srv.Addr)
-	if err := runHTTPServer(ctx, srv); err != nil {
+	if err := karasuapi.RunHTTPServer(ctx, srv); err != nil {
 		slog.Error("application runtime error", "err", err)
 		return
 	}

@@ -1,4 +1,4 @@
-package main
+package store
 
 import (
 	"database/sql"
@@ -12,12 +12,13 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type CandleStore struct {
+// SQLiteStore is the SQLite-backed implementation of CandleStore.
+type SQLiteStore struct {
 	db      *sql.DB
 	writeMu sync.Mutex
 }
 
-func NewCandleStore(dbPath string) (*CandleStore, error) {
+func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	if dbPath == "" {
 		dbPath = "./karasu.db"
 	}
@@ -41,7 +42,7 @@ func NewCandleStore(dbPath string) (*CandleStore, error) {
 		return nil, fmt.Errorf("failed to apply sqlite pragmas: %w", err)
 	}
 
-	store := &CandleStore{db: db}
+	store := &SQLiteStore{db: db}
 	if err := store.ensureSchema(); err != nil {
 		db.Close()
 		return nil, err
@@ -50,14 +51,14 @@ func NewCandleStore(dbPath string) (*CandleStore, error) {
 	return store, nil
 }
 
-func (s *CandleStore) Close() error {
+func (s *SQLiteStore) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
 	return s.db.Close()
 }
 
-func (s *CandleStore) ensureSchema() error {
+func (s *SQLiteStore) ensureSchema() error {
 	_, err := s.db.Exec(`
 	CREATE TABLE IF NOT EXISTS crypto_candles (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,7 +89,7 @@ func (s *CandleStore) ensureSchema() error {
 	return nil
 }
 
-func (s *CandleStore) UpsertCandles(exchangeName, symbol, timeframe string, candles []exchange.Candle) error {
+func (s *SQLiteStore) UpsertCandles(exchangeName, symbol, timeframe string, candles []exchange.Candle) error {
 	if len(candles) == 0 {
 		return nil
 	}
@@ -114,7 +115,7 @@ func (s *CandleStore) UpsertCandles(exchangeName, symbol, timeframe string, cand
 	return lastErr
 }
 
-func (s *CandleStore) upsertCandlesTx(exchangeName, symbol, timeframe string, candles []exchange.Candle) error {
+func (s *SQLiteStore) upsertCandlesTx(exchangeName, symbol, timeframe string, candles []exchange.Candle) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -172,7 +173,7 @@ func isSQLiteBusy(err error) bool {
 	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "DATABASE IS LOCKED")
 }
 
-func (s *CandleStore) QueryCandles(exchangeName, symbol, timeframe string, limit int) ([]exchange.Candle, error) {
+func (s *SQLiteStore) QueryCandles(exchangeName, symbol, timeframe string, limit int) ([]exchange.Candle, error) {
 	if limit <= 0 {
 		limit = 200
 	}
@@ -225,7 +226,7 @@ func (s *CandleStore) QueryCandles(exchangeName, symbol, timeframe string, limit
 	return candles, nil
 }
 
-func (s *CandleStore) LastCandleOpenTime(exchangeName, symbol, timeframe string) (time.Time, bool, error) {
+func (s *SQLiteStore) LastCandleOpenTime(exchangeName, symbol, timeframe string) (time.Time, bool, error) {
 	var raw string
 	err := s.db.QueryRow(`
 		SELECT open_time

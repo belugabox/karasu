@@ -54,6 +54,8 @@ type ChartWindow = {
   label: string
 }
 
+type AppTab = 'overview' | 'markets' | 'backtest'
+
 const chartWindows: ChartWindow[] = [
   { candles: 48, label: '4h' },
   { candles: 96, label: '8h' },
@@ -327,6 +329,9 @@ function App() {
   const [hoveredChartIndex, setHoveredChartIndex] = useState<number | null>(null)
   const [lastRefresh, setLastRefresh] = useState<string>('')
   const [error, setError] = useState<string>('')
+  const [isBacktesting, setIsBacktesting] = useState(false)
+  const [backtestMessage, setBacktestMessage] = useState<string>('')
+  const [activeTab, setActiveTab] = useState<AppTab>('overview')
 
   const topSymbols = useMemo(
     () => markets.slice(0, 20).map((m) => m.symbol),
@@ -453,6 +458,83 @@ function App() {
     setHoveredChartIndex(null)
   }, [selectedSymbol, chartWindow])
 
+  const handleBacktest = async () => {
+    setIsBacktesting(true)
+    setBacktestMessage('')
+    try {
+      const now = new Date()
+      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+
+      const params = new URLSearchParams({
+        symbol: selectedSymbol,
+        from: sevenDaysAgo.toISOString(),
+        to: now.toISOString(),
+      })
+
+      const res = await fetch(`/api/backtest-symbol?${params.toString()}`, {
+        method: 'POST',
+      })
+
+      if (!res.ok) {
+        throw new Error(`API error (${res.status})`)
+      }
+
+      const data = (await res.json()) as { job?: { id?: string } }
+      const jobId = data.job?.id
+      if (!jobId) {
+        throw new Error('missing backfill job id')
+      }
+
+      setBacktestMessage(`Backfill en cours pour ${selectedSymbol}... (job: ${jobId})`)
+
+      let done = false
+      for (let attempt = 0; attempt < 90; attempt++) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2000))
+        const statusParams = new URLSearchParams({ jobId })
+        const statusRes = await fetch(`/api/backfill-status?${statusParams.toString()}`)
+        if (!statusRes.ok) {
+          continue
+        }
+        const statusBody = (await statusRes.json()) as {
+          job?: { state?: string; report?: { persisted5m?: number }; error?: string }
+        }
+        const state = statusBody.job?.state
+        if (state === 'done') {
+          const persisted = statusBody.job?.report?.persisted5m ?? 0
+          setBacktestMessage(`✓ Backfill terminé pour ${selectedSymbol} (${persisted} bougies 5m persistées)`)
+          done = true
+          break
+        }
+        if (state === 'failed') {
+          throw new Error(statusBody.job?.error || 'backfill failed')
+        }
+      }
+
+      if (!done) {
+        setBacktestMessage(`Backfill toujours en cours pour ${selectedSymbol}. Consultez le statut plus tard.`)
+        return
+      }
+
+      // Recharger les données historiques
+      const historyParams = new URLSearchParams({
+        symbol: selectedSymbol,
+        limit: '500',
+      })
+      const historyRes = await fetch(`/api/candles-5m?${historyParams.toString()}`)
+      if (historyRes.ok) {
+        const body = (await historyRes.json()) as { candles?: unknown[] }
+        const normalized = Array.isArray(body.candles)
+          ? body.candles.map(normalizeCandle)
+          : []
+        setHistory5m(normalized)
+      }
+    } catch (err) {
+      setBacktestMessage(`✗ Backtesting failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    } finally {
+      setIsBacktesting(false)
+    }
+  }
+
   const selectedLive = liveCandles.find((c) => c.symbol === selectedSymbol)
   const selectedTrendValues = history5m.slice(-24).map((candle) => candle.close)
   const topMomentumValues = markets.slice(0, 20).map((market) => market.change24h)
@@ -499,6 +581,32 @@ function App() {
         </div>
       </header>
 
+      <nav className="tabs" aria-label="Navigation principale">
+        <button
+          type="button"
+          className={activeTab === 'overview' ? 'tab-button active' : 'tab-button'}
+          onClick={() => setActiveTab('overview')}
+        >
+          Vue d&apos;ensemble
+        </button>
+        <button
+          type="button"
+          className={activeTab === 'markets' ? 'tab-button active' : 'tab-button'}
+          onClick={() => setActiveTab('markets')}
+        >
+          Marchés
+        </button>
+        <button
+          type="button"
+          className={activeTab === 'backtest' ? 'tab-button active' : 'tab-button'}
+          onClick={() => setActiveTab('backtest')}
+        >
+          Backtesting
+        </button>
+      </nav>
+
+      {activeTab === 'overview' && (
+      <>
       <section className="kpi-grid">
         <article className="card">
           <p>Live close (1m)</p>
@@ -551,9 +659,12 @@ function App() {
           />
         </article>
       </section>
+      </>
+      )}
 
       {error && <p className="error">{error}</p>}
 
+      {activeTab === 'markets' && (
       <section className="panel-grid">
         <article className="panel">
           <h3>Top markets</h3>
@@ -619,7 +730,9 @@ function App() {
           </div>
         </article>
       </section>
+      )}
 
+      {activeTab === 'backtest' && (
       <section className="panel backtest-panel">
         <div className="backtest-head">
           <div>
@@ -640,8 +753,22 @@ function App() {
                 {window.label}
               </button>
             ))}
+            <button
+              type="button"
+              className="backtest-button"
+              onClick={handleBacktest}
+              disabled={isBacktesting}
+            >
+              {isBacktesting ? 'Backtesting...' : '⟳ Backfill last 7d'}
+            </button>
           </div>
         </div>
+
+        {backtestMessage && (
+          <div className={`backtest-message ${backtestMessage.startsWith('✓') ? 'success' : 'error'}`}>
+            {backtestMessage}
+          </div>
+        )}
 
         <div className="backtest-stats">
           <div>
@@ -689,6 +816,7 @@ function App() {
           </div>
         </div>
       </section>
+      )}
     </main>
   )
 }

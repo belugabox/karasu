@@ -1,21 +1,25 @@
-package main
+package scoring
 
 import (
 	"math"
 	"time"
 )
 
+// Candle is the scoring package's own OHLCV representation,
+// independent of exchange.Candle to keep this package self-contained.
 type Candle struct {
-	Open      float64   // open price
-	High      float64   // highest price
-	Low       float64   // lowest price
-	Close     float64   // close price
-	Volume    float64   // traded volume during the candle period
-	OpenTime  time.Time // time when the candle opened
-	CloseTime time.Time // time when the candle closed
+	Open      float64
+	High      float64
+	Low       float64
+	Close     float64
+	Volume    float64
+	OpenTime  time.Time
+	CloseTime time.Time
 }
 
-func computeQualityScore(candles []Candle, timeframe string) float64 {
+// ComputeQualityScore returns a 0-100 momentum/quality score for a candle series.
+// timeframe can be "short", "medium", or anything else (treated as "long").
+func ComputeQualityScore(candles []Candle, timeframe string) float64 {
 	if len(candles) < 30 {
 		return 0
 	}
@@ -24,19 +28,19 @@ func computeQualityScore(candles []Candle, timeframe string) float64 {
 	volumes := candleVolumes(candles)
 	price := closes[len(closes)-1]
 
-	rsi := rsiScore(closes)
-	macd := macdScore(closes)
-	bollinger := bollingerScore(closes, price)
-	volume := volumeScore(volumes)
-	sma := smaTrendScore(closes)
+	rsiVal := rsiScore(closes)
+	macdVal := macdScore(closes)
+	bollingerVal := bollingerScore(closes, price)
+	volumeVal := volumeScore(volumes)
+	smaVal := smaTrendScore(closes)
 
 	switch timeframe {
 	case "short":
-		return clamp(rsi*0.30+macd*0.40+bollinger*0.10+volume*0.20, 0, 100)
+		return clamp(rsiVal*0.30+macdVal*0.40+bollingerVal*0.10+volumeVal*0.20, 0, 100)
 	case "medium":
-		return clamp(rsi*0.25+macd*0.35+bollinger*0.20+volume*0.10+sma*0.10, 0, 100)
+		return clamp(rsiVal*0.25+macdVal*0.35+bollingerVal*0.20+volumeVal*0.10+smaVal*0.10, 0, 100)
 	default:
-		return clamp(rsi*0.20+macd*0.30+bollinger*0.15+volume*0.05+sma*0.30, 0, 100)
+		return clamp(rsiVal*0.20+macdVal*0.30+bollingerVal*0.15+volumeVal*0.05+smaVal*0.30, 0, 100)
 	}
 }
 
@@ -65,7 +69,7 @@ func rsiScore(closes []float64) float64 {
 }
 
 func macdScore(closes []float64) float64 {
-	macdLine, signal := macd(closes)
+	macdLine, signal := macdCalc(closes)
 	if len(macdLine) == 0 || len(signal) == 0 {
 		return 50
 	}
@@ -79,7 +83,7 @@ func macdScore(closes []float64) float64 {
 }
 
 func bollingerScore(closes []float64, price float64) float64 {
-	mid, up, low := bollinger(closes, 20, 2)
+	mid, up, low := bollingerCalc(closes, 20, 2)
 	if up <= low || price <= 0 {
 		return 50
 	}
@@ -147,7 +151,7 @@ func ema(values []float64, period int) []float64 {
 	return out
 }
 
-func macd(closes []float64) ([]float64, []float64) {
+func macdCalc(closes []float64) ([]float64, []float64) {
 	if len(closes) < 35 {
 		return nil, nil
 	}
@@ -182,7 +186,7 @@ func rsi(closes []float64, period int) float64 {
 	return 100 - (100 / (1 + rs))
 }
 
-func bollinger(closes []float64, period int, deviation float64) (float64, float64, float64) {
+func bollingerCalc(closes []float64, period int, deviation float64) (float64, float64, float64) {
 	if len(closes) < period {
 		return 0, 0, 0
 	}

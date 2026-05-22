@@ -1,4 +1,4 @@
-package main
+package ingestion
 
 import (
 	"fmt"
@@ -6,9 +6,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"karasu/internal/exchange"
+	"karasu/internal/market"
+	"karasu/internal/store"
 )
 
 const (
@@ -16,8 +19,10 @@ const (
 	defaultOtherBatchSize  = 80
 	defaultRepairLookback  = 6 * time.Hour
 	defaultBackfillChunk   = 12 * time.Hour
+	defaultBackfillQueue   = 128
 )
 
+// LiveCandle is a real-time candle snapshot served by /api/live-1m.
 type LiveCandle struct {
 	Symbol    string    `json:"symbol"`
 	Open      float64   `json:"open"`
@@ -35,6 +40,7 @@ type liveEntry struct {
 	updatedAt time.Time
 }
 
+// LiveCache holds the latest 1m candle per symbol in memory.
 type LiveCache struct {
 	mu     sync.RWMutex
 	latest map[string]liveEntry
@@ -108,9 +114,10 @@ func toLiveCandle(symbol string, entry liveEntry) LiveCandle {
 	}
 }
 
+// IngestionService orchestrates live candle ingestion and backfill.
 type IngestionService struct {
 	exchangeClient exchange.ExchangeClient
-	store          *CandleStore
+	store          store.CandleStore
 	liveCache      *LiveCache
 	otherBatchSize int
 	topSymbolsSize int
@@ -122,12 +129,17 @@ type IngestionService struct {
 	allSymbols  []string
 	topSymbols  []string
 	otherCursor int
+
+	backfillQueue chan backfillRequest
+	backfillSeq   atomic.Uint64
+	jobsMu        sync.RWMutex
+	jobs          map[string]BackfillJob
 }
 
-func NewIngestionService(exchangeClient exchange.ExchangeClient, store *CandleStore) *IngestionService {
-	return &IngestionService{
+func NewIngestionService(exchangeClient exchange.ExchangeClient, candleStore store.CandleStore) *IngestionService {
+	s := &IngestionService{
 		exchangeClient: exchangeClient,
-		store:          store,
+		store:          candleStore,
 		liveCache:      NewLiveCache(),
 		otherBatchSize: defaultOtherBatchSize,
 		topSymbolsSize: defaultTopSymbolsCount,
@@ -135,14 +147,17 @@ func NewIngestionService(exchangeClient exchange.ExchangeClient, store *CandleSt
 		backfillChunk:  defaultBackfillChunk,
 		allSymbols:     make([]string, 0),
 		topSymbols:     make([]string, 0),
+		backfillQueue:  make(chan backfillRequest, defaultBackfillQueue),
+		jobs:           make(map[string]BackfillJob),
 	}
+	s.startBackfillWorker()
+	return s
 }
 
 func (s *IngestionService) SetRepairLookback(duration time.Duration) error {
 	if duration <= 0 {
 		return fmt.Errorf("repair lookback must be > 0")
 	}
-
 	s.mu.Lock()
 	s.repairLookback = duration
 	s.mu.Unlock()
@@ -153,19 +168,233 @@ func (s *IngestionService) SetBackfillChunk(duration time.Duration) error {
 	if duration <= 0 {
 		return fmt.Errorf("backfill chunk must be > 0")
 	}
-
 	s.mu.Lock()
 	s.backfillChunk = duration
 	s.mu.Unlock()
 	return nil
 }
 
+// BackfillReport summarises the result of a Backfill5m run.
 type BackfillReport struct {
 	Symbols          int   `json:"symbols"`
 	Chunks           int   `json:"chunks"`
 	Fetched1mCandles int   `json:"fetched1mCandles"`
+	Aggregated5m     int   `json:"aggregated5m"`
+	Filtered5m       int   `json:"filtered5m"`
 	Persisted5m      int   `json:"persisted5m"`
 	DurationMs       int64 `json:"durationMs"`
+}
+
+type BackfillJobState string
+
+const (
+	BackfillQueued  BackfillJobState = "queued"
+	BackfillRunning BackfillJobState = "running"
+	BackfillDone    BackfillJobState = "done"
+	BackfillFailed  BackfillJobState = "failed"
+)
+
+type BackfillJob struct {
+	ID        string           `json:"id"`
+	Symbols   []string         `json:"symbols"`
+	From      time.Time        `json:"from"`
+	To        time.Time        `json:"to"`
+	Reason    string           `json:"reason"`
+	State     BackfillJobState `json:"state"`
+	CreatedAt time.Time        `json:"createdAt"`
+	StartedAt *time.Time       `json:"startedAt,omitempty"`
+	EndedAt   *time.Time       `json:"endedAt,omitempty"`
+	Report    *BackfillReport  `json:"report,omitempty"`
+	Error     string           `json:"error,omitempty"`
+}
+
+type backfillRequest struct {
+	JobID   string
+	Symbols []string
+	From    time.Time
+	To      time.Time
+	Reason  string
+}
+
+func (s *IngestionService) EnqueueBackfill(symbols []string, from, to time.Time, reason string) (BackfillJob, error) {
+	from = from.UTC().Truncate(time.Minute)
+	to = to.UTC().Truncate(time.Minute)
+	if !from.Before(to) {
+		return BackfillJob{}, fmt.Errorf("from must be before to")
+	}
+
+	normalizedSymbols := make([]string, 0, len(symbols))
+	for _, sym := range symbols {
+		sym = strings.ToUpper(strings.TrimSpace(sym))
+		if sym == "" {
+			continue
+		}
+		normalizedSymbols = append(normalizedSymbols, sym)
+	}
+	normalizedSymbols = uniqueSymbols(normalizedSymbols)
+
+	id := fmt.Sprintf("bf_%d_%d", time.Now().UTC().UnixMilli(), s.backfillSeq.Add(1))
+	job := BackfillJob{
+		ID:        id,
+		Symbols:   normalizedSymbols,
+		From:      from,
+		To:        to,
+		Reason:    reason,
+		State:     BackfillQueued,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	s.jobsMu.Lock()
+	s.jobs[id] = job
+	s.jobsMu.Unlock()
+
+	request := backfillRequest{JobID: id, Symbols: normalizedSymbols, From: from, To: to, Reason: reason}
+	select {
+	case s.backfillQueue <- request:
+		return job, nil
+	default:
+		s.jobsMu.Lock()
+		delete(s.jobs, id)
+		s.jobsMu.Unlock()
+		return BackfillJob{}, fmt.Errorf("backfill queue is full")
+	}
+}
+
+func (s *IngestionService) GetBackfillJob(jobID string) (BackfillJob, bool) {
+	s.jobsMu.RLock()
+	defer s.jobsMu.RUnlock()
+	job, ok := s.jobs[jobID]
+	if !ok {
+		return BackfillJob{}, false
+	}
+	return job, true
+}
+
+func (s *IngestionService) ListBackfillJobs(limit int) []BackfillJob {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	s.jobsMu.RLock()
+	jobs := make([]BackfillJob, 0, len(s.jobs))
+	for _, job := range s.jobs {
+		jobs = append(jobs, job)
+	}
+	s.jobsMu.RUnlock()
+
+	sort.Slice(jobs, func(i, j int) bool {
+		return jobs[i].CreatedAt.After(jobs[j].CreatedAt)
+	})
+	if len(jobs) > limit {
+		jobs = jobs[:limit]
+	}
+	return jobs
+}
+
+func (s *IngestionService) startBackfillWorker() {
+	go func() {
+		for req := range s.backfillQueue {
+			now := time.Now().UTC()
+			s.jobsMu.Lock()
+			job := s.jobs[req.JobID]
+			job.State = BackfillRunning
+			job.StartedAt = &now
+			s.jobs[req.JobID] = job
+			s.jobsMu.Unlock()
+
+			report, err := s.Backfill5m(req.Symbols, req.From, req.To)
+
+			ended := time.Now().UTC()
+			s.jobsMu.Lock()
+			job = s.jobs[req.JobID]
+			job.EndedAt = &ended
+			job.Report = &report
+			if err != nil {
+				job.State = BackfillFailed
+				job.Error = err.Error()
+			} else {
+				job.State = BackfillDone
+				job.Error = ""
+			}
+			s.jobs[req.JobID] = job
+			s.jobsMu.Unlock()
+		}
+	}()
+}
+
+func (s *IngestionService) hasActiveBackfillForSymbol(symbol string) bool {
+	s.jobsMu.RLock()
+	defer s.jobsMu.RUnlock()
+	for _, job := range s.jobs {
+		if job.State != BackfillQueued && job.State != BackfillRunning {
+			continue
+		}
+		for _, sym := range job.Symbols {
+			if sym == symbol {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// RepairDetectedGaps detects stale symbols and enqueues targeted backfills.
+func (s *IngestionService) RepairDetectedGaps() error {
+	symbols := s.getAllSymbols()
+	if len(symbols) == 0 {
+		if err := s.RefreshUniverse(); err != nil {
+			return err
+		}
+		symbols = s.getAllSymbols()
+	}
+	if len(symbols) == 0 {
+		return nil
+	}
+
+	nowFloor := time.Now().UTC().Truncate(5 * time.Minute)
+	repairFromFloor := nowFloor.Add(-s.repairLookback)
+	queued := 0
+	const maxQueuedPerRun = 15
+
+	for _, symbol := range symbols {
+		if queued >= maxQueuedPerRun {
+			break
+		}
+		if s.hasActiveBackfillForSymbol(symbol) {
+			continue
+		}
+
+		lastOpen, found, err := s.store.LastCandleOpenTime("bitvavo", symbol, "5m")
+		if err != nil {
+			slog.Warn("gap repair read last candle failed", "symbol", symbol, "err", err)
+			continue
+		}
+
+		from := repairFromFloor
+		if found {
+			expectedNext := lastOpen.UTC().Add(5 * time.Minute)
+			if !expectedNext.Before(nowFloor.Add(-5 * time.Minute)) {
+				continue
+			}
+			if expectedNext.After(from) {
+				from = expectedNext
+			}
+		}
+
+		if _, err := s.EnqueueBackfill([]string{symbol}, from, nowFloor, "gap-repair"); err != nil {
+			slog.Warn("gap repair enqueue failed", "symbol", symbol, "err", err)
+			continue
+		}
+		queued++
+	}
+
+	if queued > 0 {
+		slog.Info("gap repair queued backfills", "count", queued)
+	}
+	return nil
 }
 
 func (s *IngestionService) Backfill5m(symbols []string, from, to time.Time) (BackfillReport, error) {
@@ -229,8 +458,11 @@ func (s *IngestionService) Backfill5m(symbols []string, from, to time.Time) (Bac
 					continue
 				}
 
+				report.Aggregated5m += len(agg.Candles)
+
 				closedFloor := chunkEnd.Truncate(5 * time.Minute)
 				candles5m := filterClosedCandles(agg.Candles, closedFloor)
+				report.Filtered5m += len(candles5m)
 				if len(candles5m) > 0 {
 					if err := s.store.UpsertCandles("bitvavo", symbol, "5m", candles5m); err != nil {
 						slog.Warn("backfill persist failed", "symbol", symbol, "count", len(candles5m), "err", err)
@@ -239,6 +471,7 @@ func (s *IngestionService) Backfill5m(symbols []string, from, to time.Time) (Bac
 						}
 					} else {
 						report.Persisted5m += len(candles5m)
+						slog.Debug("backfill upserted", "symbol", symbol, "count", len(candles5m), "from", candles5m[0].OpenTime, "to", candles5m[len(candles5m)-1].OpenTime)
 					}
 				}
 			}
@@ -248,13 +481,16 @@ func (s *IngestionService) Backfill5m(symbols []string, from, to time.Time) (Bac
 	}
 
 	report.DurationMs = time.Since(startedAt).Milliseconds()
+
 	slog.Info(
 		"backfill completed",
 		"symbols", report.Symbols,
 		"chunks", report.Chunks,
 		"fetched1m", report.Fetched1mCandles,
+		"aggregated5m", report.Aggregated5m,
+		"filtered5m", report.Filtered5m,
 		"persisted5m", report.Persisted5m,
-		"durationMs", report.DurationMs,
+		"duration_ms", report.DurationMs,
 	)
 
 	if firstErr != nil {
@@ -279,7 +515,7 @@ func (s *IngestionService) RefreshUniverse() error {
 	}
 	symbols = uniqueSymbols(symbols)
 
-	topSymbols, err := findTopSymbols(s.exchangeClient)
+	topSymbols, err := market.FindTopSymbols(s.exchangeClient)
 	if err != nil {
 		return fmt.Errorf("failed to compute top symbols: %w", err)
 	}
@@ -312,7 +548,6 @@ func (s *IngestionService) IngestTopSymbols() error {
 	if len(symbols) == 0 {
 		return nil
 	}
-
 	return s.ingestSymbols(symbols)
 }
 
@@ -344,7 +579,7 @@ func (s *IngestionService) IngestOtherSymbols() error {
 		return nil
 	}
 
-	batch := s.nextOtherBatch(others)
+	batch := s.nextOtherBatchPrioritized(others)
 	if len(batch) == 0 {
 		return nil
 	}
@@ -354,8 +589,8 @@ func (s *IngestionService) IngestOtherSymbols() error {
 
 func (s *IngestionService) LiveCandles(symbols []string, limit int) []LiveCandle {
 	normalized := make([]string, 0, len(symbols))
-	for _, symbol := range symbols {
-		s := strings.ToUpper(strings.TrimSpace(symbol))
+	for _, sym := range symbols {
+		s := strings.ToUpper(strings.TrimSpace(sym))
 		if s == "" {
 			continue
 		}
@@ -384,13 +619,11 @@ func (s *IngestionService) ingestSymbols(symbols []string) error {
 			}
 		}
 
-		// Rolling reconciliation window to heal gaps in the middle of the recent history.
 		repairStart := minuteEnd.Add(-s.repairLookback)
 		if repairStart.Before(start) {
 			start = repairStart
 		}
 
-		// Keep requests bounded in case of very old gaps; catch-up continues on next runs.
 		maxLookback := minuteEnd.Add(-24 * time.Hour)
 		if start.Before(maxLookback) {
 			start = maxLookback
@@ -460,14 +693,12 @@ func (s *IngestionService) getAllSymbols() []string {
 	return res
 }
 
-func (s *IngestionService) nextOtherBatch(others []string) []string {
+func (s *IngestionService) nextOtherBatchPrioritized(others []string) []string {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if len(others) == 0 {
-		return nil
+	start := s.otherCursor
+	if start >= len(others) {
+		start = 0
 	}
-
 	batchSize := s.otherBatchSize
 	if batchSize <= 0 {
 		batchSize = defaultOtherBatchSize
@@ -475,27 +706,68 @@ func (s *IngestionService) nextOtherBatch(others []string) []string {
 	if batchSize > len(others) {
 		batchSize = len(others)
 	}
-
-	start := s.otherCursor
-	if start >= len(others) {
-		start = 0
+	candidateSize := batchSize * 3
+	if candidateSize > len(others) {
+		candidateSize = len(others)
 	}
+
+	candidates := make([]string, 0, candidateSize)
+	for i := 0; i < candidateSize; i++ {
+		idx := (start + i) % len(others)
+		candidates = append(candidates, others[idx])
+	}
+	s.otherCursor = (start + candidateSize) % len(others)
+	s.mu.Unlock()
+
+	if len(others) == 0 {
+		return nil
+	}
+
+	now := time.Now().UTC().Truncate(5 * time.Minute)
+	type scoredSymbol struct {
+		symbol string
+		score  float64
+	}
+	scored := make([]scoredSymbol, 0, len(candidates))
+	for _, symbol := range candidates {
+		scored = append(scored, scoredSymbol{symbol: symbol, score: s.otherSymbolPriority(symbol, now)})
+	}
+
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score == scored[j].score {
+			return scored[i].symbol < scored[j].symbol
+		}
+		return scored[i].score > scored[j].score
+	})
 
 	batch := make([]string, 0, batchSize)
-	for i := 0; i < batchSize; i++ {
-		idx := (start + i) % len(others)
-		batch = append(batch, others[idx])
+	for i := 0; i < batchSize && i < len(scored); i++ {
+		batch = append(batch, scored[i].symbol)
+	}
+	return batch
+}
+
+func (s *IngestionService) otherSymbolPriority(symbol string, now time.Time) float64 {
+	lastOpen, found, err := s.store.LastCandleOpenTime("bitvavo", symbol, "5m")
+	if err != nil {
+		slog.Debug("priority read failed", "symbol", symbol, "err", err)
+		return 0
+	}
+	if !found {
+		return 1_000_000
 	}
 
-	s.otherCursor = (start + batchSize) % len(others)
-	return batch
+	expectedNext := lastOpen.UTC().Add(5 * time.Minute)
+	if expectedNext.After(now) {
+		return 0
+	}
+	return now.Sub(expectedNext).Minutes()
 }
 
 func filterClosedCandles(candles []exchange.Candle, closeBeforeOrAt time.Time) []exchange.Candle {
 	if len(candles) == 0 {
 		return nil
 	}
-
 	res := make([]exchange.Candle, 0, len(candles))
 	for _, candle := range candles {
 		if candle.CloseTime.After(closeBeforeOrAt) {
@@ -532,11 +804,4 @@ func uniqueSymbols(symbols []string) []string {
 	}
 	sort.Strings(res)
 	return res
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
