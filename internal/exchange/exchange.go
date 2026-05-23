@@ -53,6 +53,7 @@ type Wallet struct {
 type WalletAsset struct {
 	Symbol        string  // symbol of the asset, e.g., "BTC"
 	Amount        float64 // amount of the asset
+	InOrder       float64 // amount of the asset that is currently in open orders (not available for trading)
 	StakingAmount float64 // amount of the asset that is staked (if applicable)
 	Value         float64 // value of the asset in EUR
 }

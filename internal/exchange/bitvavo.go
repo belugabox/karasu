@@ -120,14 +120,19 @@ func (c BitvavoClient) Wallet() (Wallet, error) {
 		if err != nil {
 			continue
 		}
+		amountInOrder, err := strconv.ParseFloat(raw.InOrder, 64)
+		if err != nil {
+			continue
+		}
 		price, ok := prices[raw.Symbol]
 		if !ok {
 			continue
 		}
-		value := amount * price
+		value := (amount + amountInOrder) * price
 		mapAssets[raw.Symbol] = WalletAsset{
 			Symbol:        raw.Symbol,
 			Amount:        amount,
+			InOrder:       amountInOrder,
 			StakingAmount: 0,
 			Value:         value,
 		}

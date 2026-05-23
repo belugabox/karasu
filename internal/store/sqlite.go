@@ -250,3 +250,62 @@ func (s *SQLiteStore) LastCandleOpenTime(exchangeName, symbol, timeframe string)
 
 	return parsed.UTC(), true, nil
 }
+
+func (s *SQLiteStore) QueryDailySymbolActivity(exchangeName, timeframe string, days int) ([]DailySymbolActivity, error) {
+	if days <= 0 {
+		days = 90
+	}
+	if days > 365 {
+		days = 365
+	}
+
+	endDay := time.Now().UTC().Truncate(24 * time.Hour)
+	startDay := endDay.AddDate(0, 0, -(days - 1))
+
+	rows, err := s.db.Query(`
+		SELECT
+			substr(open_time, 1, 10) AS day,
+			COUNT(DISTINCT symbol) AS symbol_count,
+			COUNT(*) AS candle_count
+		FROM crypto_candles
+		WHERE exchange = ?
+			AND timeframe = ?
+			AND open_time >= ?
+			AND open_time < ?
+		GROUP BY day
+		ORDER BY day ASC;
+	`,
+		exchangeName,
+		timeframe,
+		startDay.Format(time.RFC3339Nano),
+		endDay.Add(24*time.Hour).Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query daily symbol activity: %w", err)
+	}
+	defer rows.Close()
+
+	byDay := make(map[string]DailySymbolActivity, days)
+	for rows.Next() {
+		var item DailySymbolActivity
+		if err := rows.Scan(&item.Day, &item.SymbolCount, &item.CandleCount); err != nil {
+			return nil, fmt.Errorf("failed to scan daily symbol activity: %w", err)
+		}
+		byDay[item.Day] = item
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error while iterating daily symbol activity rows: %w", err)
+	}
+
+	result := make([]DailySymbolActivity, 0, days)
+	for d := 0; d < days; d++ {
+		day := startDay.AddDate(0, 0, d).Format("2006-01-02")
+		if item, ok := byDay[day]; ok {
+			result = append(result, item)
+			continue
+		}
+		result = append(result, DailySymbolActivity{Day: day, SymbolCount: 0, CandleCount: 0})
+	}
+
+	return result, nil
+}

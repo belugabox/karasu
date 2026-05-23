@@ -303,6 +303,84 @@ h1 {
   margin-top: 14px;
 }
 
+.heatmap-panel {
+  margin-top: 14px;
+}
+
+.heatmap-head {
+  padding: 14px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--stroke);
+}
+
+.heatmap-head p {
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+  margin-top: 4px;
+}
+
+.heatmap-head span {
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  background: #f3f6fa;
+  border: 1px solid var(--stroke);
+  border-radius: 999px;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
+.heatmap-wrap {
+  padding: 14px;
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.heatmap-week {
+  display: grid;
+  grid-template-rows: repeat(7, 11px);
+  gap: 4px;
+}
+
+.heatmap-cell {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  border: 1px solid rgba(15, 23, 42, 0.04);
+}
+
+.heatmap-cell.level-0 {
+  background: #ebedf0;
+}
+
+.heatmap-cell.level-1 {
+  background: #9be9a8;
+}
+
+.heatmap-cell.level-2 {
+  background: #40c463;
+}
+
+.heatmap-cell.level-3 {
+  background: #30a14e;
+}
+
+.heatmap-cell.level-4 {
+  background: #216e39;
+}
+
+.heatmap-legend {
+  padding: 0 14px 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
+
 .tasks-head {
   padding: 14px;
   display: flex;
@@ -326,6 +404,38 @@ h1 {
   border-radius: 999px;
   padding: 4px 8px;
   white-space: nowrap;
+}
+
+.tasks-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.backfill-all-button {
+  border: 1px solid #2563eb;
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #ffffff;
+  border-radius: 999px;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-weight: 500;
+  transition:
+    transform 120ms ease,
+    opacity 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.backfill-all-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.backfill-all-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .tasks-kpis {
@@ -600,4 +710,145 @@ th {
   .task-details-cell {
     min-width: 240px;
   }
+
+  .heatmap-wrap {
+    gap: 3px;
+  }
+
+  .heatmap-week {
+    grid-template-rows: repeat(7, 10px);
+    gap: 3px;
+  }
+
+  .heatmap-cell {
+    width: 10px;
+    height: 10px;
+  }
+}
+
+.wallet-panel {
+  padding: 20px;
+}
+
+.wallet-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.wallet-head > div {
+  flex: 1;
+}
+
+.wallet-head h3 {
+  margin: 0 0 8px 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.wallet-head p {
+  margin: 0;
+  color: #999;
+  font-size: 0.875rem;
+}
+
+.wallet-head > span {
+  color: #666;
+  font-size: 0.85rem;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 3px;
+}
+
+.wallet-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  color: #666;
+  font-size: 0.9rem;
+  border: 1px dashed #333;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.wallet-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.wallet-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.wallet-card {
+  padding: 16px;
+  background: linear-gradient(
+    135deg,
+    rgba(59, 130, 246, 0.1),
+    rgba(99, 102, 241, 0.05)
+  );
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wallet-card span {
+  font-size: 0.875rem;
+  color: #999;
+}
+
+.wallet-card h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #3b82f6;
+}
+
+.wallet-assets {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wallet-assets h4 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+.wallet-assets table {
+  width: 100%;
+  border-collapse: collapse;
+  background: rgba(255, 255, 255, 0.01);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.wallet-assets th {
+  padding: 12px;
+  text-align: left;
+  font-size: 0.875rem;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  color: #999;
+}
+
+.wallet-assets td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+  font-size: 0.9rem;
+}
+
+.wallet-assets tbody tr:hover {
+  background: rgba(59, 130, 246, 0.05);
 }

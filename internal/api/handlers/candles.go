@@ -64,4 +64,30 @@ func RegisterCandles(r *gin.Engine, ingestionService *ingestion.IngestionService
 			"candles":   candles,
 		})
 	})
+
+	r.GET("/api/activity/daily-symbols", func(c *gin.Context) {
+		days, err := strconv.Atoi(c.DefaultQuery("days", "180"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid days"})
+			return
+		}
+
+		timeframe := strings.TrimSpace(c.DefaultQuery("timeframe", "5m"))
+		if timeframe == "" {
+			timeframe = "5m"
+		}
+
+		activity, err := candleStore.QueryDailySymbolActivity("bitvavo", timeframe, days)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"exchange":  "bitvavo",
+			"timeframe": timeframe,
+			"count":     len(activity),
+			"days":      activity,
+		})
+	})
 }

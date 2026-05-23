@@ -78,7 +78,28 @@ type BackfillJob = {
   error?: string
 }
 
-type AppTab = 'overview' | 'markets' | 'backtest' | 'tasks'
+type DailySymbolActivity = {
+  day: string
+  symbolCount: number
+  candleCount: number
+}
+
+type WalletAsset = {
+  symbol: string
+  amount: number
+  inOrder: number
+  stakingAmount: number
+  value: number
+}
+
+type Wallet = {
+  totalValue: number
+  cashValue: number
+  assetValue: number
+  assets: WalletAsset[]
+}
+
+type AppTab = 'overview' | 'markets' | 'backtest' | 'tasks' | 'heatmap' | 'wallet'
 
 const chartWindows: ChartWindow[] = [
   { candles: 48, label: '4h' },
@@ -182,6 +203,39 @@ function normalizeBackfillJob(raw: unknown): BackfillJob {
           durationMs: toNumber(reportRaw.durationMs),
         }
       : undefined,
+  }
+}
+
+function normalizeDailySymbolActivity(raw: unknown): DailySymbolActivity {
+  const r = (raw as Record<string, unknown>) || {}
+  return {
+    day: toStringValue(r.day ?? r.Day),
+    symbolCount: toNumber(r.symbolCount ?? r.SymbolCount),
+    candleCount: toNumber(r.candleCount ?? r.CandleCount),
+  }
+}
+
+function normalizeWalletAsset(raw: unknown): WalletAsset {
+  const r = (raw as Record<string, unknown>) || {}
+  return {
+    symbol: toStringValue(r.symbol ?? r.Symbol),
+    amount: toNumber(r.amount ?? r.Amount),
+    inOrder: toNumber(r.inOrder ?? r.InOrder),
+    stakingAmount: toNumber(r.stakingAmount ?? r.StakingAmount),
+    value: toNumber(r.value ?? r.Value),
+  }
+}
+
+function normalizeWallet(raw: unknown): Wallet {
+  const r = (raw as Record<string, unknown>) || {}
+  const assets = Array.isArray(r.assets ?? r.Assets)
+    ? (r.assets ?? r.Assets).map(normalizeWalletAsset)
+    : []
+  return {
+    totalValue: toNumber(r.totalValue ?? r.TotalValue),
+    cashValue: toNumber(r.cashValue ?? r.CashValue),
+    assetValue: toNumber(r.assetValue ?? r.AssetValue),
+    assets,
   }
 }
 
@@ -404,6 +458,17 @@ function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('overview')
   const [backfillJobs, setBackfillJobs] = useState<BackfillJob[]>([])
   const [jobsLoading, setJobsLoading] = useState(false)
+  const [isBackfillingAll, setIsBackfillingAll] = useState(false)
+  const [tasksMessage, setTasksMessage] = useState<string>('')
+  const [dailyActivity, setDailyActivity] = useState<DailySymbolActivity[]>([])
+  const [activityLoading, setActivityLoading] = useState(false)
+  const [wallet, setWallet] = useState<Wallet>({
+    totalValue: 0,
+    cashValue: 0,
+    assetValue: 0,
+    assets: [],
+  })
+  const [walletLoading, setWalletLoading] = useState(false)
 
   const topSymbols = useMemo(
     () => markets.slice(0, 20).map((m) => m.symbol),
@@ -569,6 +634,85 @@ function App() {
     }
   }, [activeTab, isBacktesting])
 
+  useEffect(() => {
+    if (activeTab !== 'heatmap') {
+      return
+    }
+
+    let cancelled = false
+
+    const loadActivity = async () => {
+      setActivityLoading(true)
+      try {
+        const params = new URLSearchParams({
+          days: '182',
+          timeframe: '5m',
+        })
+        const res = await fetch(`/api/activity/daily-symbols?${params.toString()}`)
+        if (!res.ok) {
+          throw new Error(`api error (${res.status})`)
+        }
+        const body = (await res.json()) as { days?: unknown[] }
+        const normalized = Array.isArray(body.days) ? body.days.map(normalizeDailySymbolActivity) : []
+        if (!cancelled) {
+          setDailyActivity(normalized)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'failed to load daily activity')
+        }
+      } finally {
+        if (!cancelled) {
+          setActivityLoading(false)
+        }
+      }
+    }
+
+    loadActivity()
+    const id = window.setInterval(loadActivity, 20_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [activeTab])
+
+  useEffect(() => {
+    if (activeTab !== 'wallet') {
+      return
+    }
+
+    let cancelled = false
+
+    const loadWallet = async () => {
+      setWalletLoading(true)
+      try {
+        const res = await fetch('/api/wallet')
+        if (!res.ok) {
+          throw new Error(`api error (${res.status})`)
+        }
+        const data = await res.json()
+        if (!cancelled) {
+          setWallet(normalizeWallet(data))
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'failed to load wallet')
+        }
+      } finally {
+        if (!cancelled) {
+          setWalletLoading(false)
+        }
+      }
+    }
+
+    loadWallet()
+    const id = window.setInterval(loadWallet, 10_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [activeTab])
+
   const handleBacktest = async () => {
     setIsBacktesting(true)
     setBacktestMessage('')
@@ -648,6 +792,39 @@ function App() {
     }
   }
 
+  const handleBackfillAllSymbols = async () => {
+    setIsBackfillingAll(true)
+    setTasksMessage('')
+    try {
+      const now = new Date()
+      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+      const params = new URLSearchParams({
+        from: sevenDaysAgo.toISOString(),
+        to: now.toISOString(),
+      })
+
+      const res = await fetch(`/api/backfill-5m?${params.toString()}`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        throw new Error(`API error (${res.status})`)
+      }
+
+      const body = (await res.json()) as { job?: unknown }
+      const job = body.job ? normalizeBackfillJob(body.job) : undefined
+      if (!job?.id) {
+        throw new Error('missing backfill job id')
+      }
+
+      setBackfillJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)])
+      setTasksMessage(`✓ Backfill global lancé (job: ${job.id})`)
+    } catch (err) {
+      setTasksMessage(`✗ Impossible de lancer le backfill global: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    } finally {
+      setIsBackfillingAll(false)
+    }
+  }
+
   const selectedLive = liveCandles.find((c) => c.symbol === selectedSymbol)
   const selectedTrendValues = history5m.slice(-24).map((candle) => candle.close)
   const topMomentumValues = markets.slice(0, 20).map((market) => market.change24h)
@@ -673,6 +850,19 @@ function App() {
   const runningJobs = backfillJobs.filter((job) => job.state === 'running' || job.state === 'queued')
   const completedJobs = backfillJobs.filter((job) => job.state === 'done')
   const failedJobs = backfillJobs.filter((job) => job.state === 'failed')
+  const maxDailySymbolCount = dailyActivity.reduce((max, d) => Math.max(max, d.symbolCount), 0)
+  const dailyRows = useMemo(() => {
+    if (dailyActivity.length === 0) {
+      return [] as DailySymbolActivity[][]
+    }
+    const rows: DailySymbolActivity[][] = []
+    let index = 0
+    while (index < dailyActivity.length) {
+      rows.push(dailyActivity.slice(index, index + 7))
+      index += 7
+    }
+    return rows
+  }, [dailyActivity])
 
   return (
     <main className="app-shell">
@@ -725,6 +915,20 @@ function App() {
           onClick={() => setActiveTab('tasks')}
         >
           Tâches
+        </button>
+        <button
+          type="button"
+          className={activeTab === 'heatmap' ? 'tab-button active' : 'tab-button'}
+          onClick={() => setActiveTab('heatmap')}
+        >
+          Heatmap
+        </button>
+        <button
+          type="button"
+          className={activeTab === 'wallet' ? 'tab-button active' : 'tab-button'}
+          onClick={() => setActiveTab('wallet')}
+        >
+          Wallet
         </button>
       </nav>
 
@@ -948,8 +1152,24 @@ function App() {
             <h3>Tâches backfill</h3>
             <p>Jobs en cours, terminés, en erreur avec durées et détails d&apos;exécution.</p>
           </div>
-          <span>{jobsLoading ? 'Actualisation...' : `${backfillJobs.length} tâches`}</span>
+          <div className="tasks-head-actions">
+            <span>{jobsLoading ? 'Actualisation...' : `${backfillJobs.length} tâches`}</span>
+            <button
+              type="button"
+              className="backfill-all-button"
+              onClick={handleBackfillAllSymbols}
+              disabled={isBackfillingAll}
+            >
+              {isBackfillingAll ? 'Lancement...' : '⟳ Backfill tous les symbols (7j)'}
+            </button>
+          </div>
         </div>
+
+        {tasksMessage && (
+          <div className={`backtest-message ${tasksMessage.startsWith('✓') ? 'success' : 'error'}`}>
+            {tasksMessage}
+          </div>
+        )}
 
         <div className="tasks-kpis">
           <div>
@@ -1011,6 +1231,106 @@ function App() {
               })}
             </tbody>
           </table>
+        </div>
+      </section>
+      )}
+
+      {activeTab === 'wallet' && (
+      <section className="panel wallet-panel">
+        <div className="wallet-head">
+          <h3>Wallet</h3>
+          <p>Portfolio et soldes des positions.</p>
+          <span>{walletLoading ? 'Actualisation...' : 'À jour'}</span>
+        </div>
+        {wallet.assets.length === 0 ? (
+          <div className="wallet-empty">
+            <p>Pas de données de wallet pour le moment.</p>
+          </div>
+        ) : (
+          <div className="wallet-content">
+            <div className="wallet-summary">
+              <div className="wallet-card">
+                <span>Valeur totale</span>
+                <h2>{formatNumber(wallet.totalValue, 2)} EUR</h2>
+              </div>
+              <div className="wallet-card">
+                <span>Valeur en espèces</span>
+                <h2>{formatNumber(wallet.cashValue, 2)} EUR</h2>
+              </div>
+              <div className="wallet-card">
+                <span>Valeur des actifs</span>
+                <h2>{formatNumber(wallet.assetValue, 2)} EUR</h2>
+              </div>
+            </div>
+            <div className="wallet-assets">
+              <h4>Actifs</h4>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Montant</th>
+                    <th>En ordre</th>
+                    <th>Staking</th>
+                    <th>Valeur (EUR)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {wallet.assets.map((asset) => (
+                    <tr key={asset.symbol}>
+                      <td>{asset.symbol}</td>
+                      <td>{formatNumber(asset.amount, 8)}</td>
+                      <td>{formatNumber(asset.inOrder, 8)}</td>
+                      <td>{formatNumber(asset.stakingAmount, 8)}</td>
+                      <td>{formatNumber(asset.value, 2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </section>
+      )}
+
+      {activeTab === 'heatmap' && (
+      <section className="panel heatmap-panel">
+        <div className="heatmap-head">
+          <div>
+            <h3>Activité quotidienne des symbols</h3>
+            <p>
+              Chaque carré représente un jour. La couleur dépend du nombre de symbols avec des
+              données 5m ce jour-là.
+            </p>
+          </div>
+          <span>{activityLoading ? 'Actualisation...' : `${dailyActivity.length} jours`}</span>
+        </div>
+
+        <div className="heatmap-wrap" role="img" aria-label="Heatmap activité quotidienne">
+          {dailyRows.map((week, weekIndex) => (
+            <div key={`week-${weekIndex}`} className="heatmap-week">
+              {week.map((day) => {
+                const ratio = maxDailySymbolCount > 0 ? day.symbolCount / maxDailySymbolCount : 0
+                const level = day.symbolCount === 0 ? 0 : ratio < 0.25 ? 1 : ratio < 0.5 ? 2 : ratio < 0.75 ? 3 : 4
+                return (
+                  <div
+                    key={day.day}
+                    className={`heatmap-cell level-${level}`}
+                    title={`${new Date(day.day).toLocaleDateString()} — ${day.symbolCount} symbols, ${day.candleCount} bougies`}
+                  />
+                )
+              })}
+            </div>
+          ))}
+        </div>
+
+        <div className="heatmap-legend">
+          <span>Moins</span>
+          <div className="heatmap-cell level-0" />
+          <div className="heatmap-cell level-1" />
+          <div className="heatmap-cell level-2" />
+          <div className="heatmap-cell level-3" />
+          <div className="heatmap-cell level-4" />
+          <span>Plus</span>
         </div>
       </section>
       )}
