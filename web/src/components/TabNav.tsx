@@ -1,4 +1,4 @@
-type AppTab = 'wallet' | 'markets'
+type AppTab = 'wallet' | 'markets' | 'system'
 
 type TabNavProps = {
   activeTab: AppTab
@@ -8,6 +8,7 @@ type TabNavProps = {
 const tabs: Array<{ id: AppTab; label: string; emoji: string }> = [
   { id: 'wallet', label: 'Portefeuille', emoji: '💜' },
   { id: 'markets', label: 'Marchés', emoji: '🌸' },
+  { id: 'system', label: 'Système', emoji: '⚙️' },
 ]
 
 export function TabNav({ activeTab, onChange }: TabNavProps) {

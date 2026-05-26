@@ -110,10 +110,23 @@ func RegisterCandles(r *gin.Engine, ingestionService *ingestion.IngestionService
 			return
 		}
 
+		offset, err := strconv.Atoi(c.DefaultQuery("offset", "0"))
+		if err != nil || offset < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid offset"})
+			return
+		}
+
 		activeOnly := strings.EqualFold(strings.TrimSpace(c.DefaultQuery("activeOnly", "false")), "true")
-		alerts := ingestionService.ListAlerts(limit, activeOnly)
+		alerts, total, err := ingestionService.ListAlerts(limit, offset, activeOnly)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"count":  len(alerts),
+			"total":  total,
+			"offset": offset,
+			"limit":  limit,
 			"alerts": alerts,
 		})
 	})

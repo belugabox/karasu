@@ -2,8 +2,9 @@ import { useState } from 'react'
 import { TabNav } from './components/TabNav'
 import { TopMarketsPanel } from './components/TopMarketsPanel'
 import { WalletPanel } from './components/WalletPanel'
+import { SystemPanel } from './components/SystemPanel'
 import './App.css'
-type AppTab = 'wallet' | 'markets'
+type AppTab = 'wallet' | 'markets' | 'system'
 
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('wallet')
@@ -20,6 +21,7 @@ function App() {
 
       {activeTab === 'wallet' && <WalletPanel />}
       {activeTab === 'markets' && <TopMarketsPanel />}
+      {activeTab === 'system' && <SystemPanel />}
     </main>
   )
 }

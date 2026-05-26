@@ -51,6 +51,7 @@ func main() {
 	defer candleStore.Close()
 
 	ingestionService := ingestion.NewIngestionService(exchangeClient, candleStore)
+	ingestionService.SetAlertStore(candleStore)
 	if err := ingestionService.RefreshUniverse(); err != nil {
 		slog.Warn("initial universe refresh failed", "err", err)
 	}
