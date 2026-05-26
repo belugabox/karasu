@@ -135,6 +135,7 @@ func toLiveCandle(symbol string, entry liveEntry) LiveCandle {
 type IngestionService struct {
 	exchangeClient exchange.ExchangeClient
 	store          store.CandleStore
+	alertStore     store.AlertStore
 	liveCache      *LiveCache
 	otherBatchSize int
 	topSymbolsSize int
@@ -149,13 +150,14 @@ type IngestionService struct {
 	rateLimitBlockedUntil time.Time
 	rateLimitLastError    string
 
-	backfillQueue chan backfillRequest
-	backfillSeq   atomic.Uint64
-	alertSeq      atomic.Uint64
-	jobsMu        sync.RWMutex
-	jobs          map[string]BackfillJob
-	alertsMu      sync.RWMutex
-	alerts        map[string]AlertEvent
+	backfillQueue  chan backfillRequest
+	backfillSeq    atomic.Uint64
+	alertSeq       atomic.Uint64
+	jobsMu         sync.RWMutex
+	jobs           map[string]BackfillJob
+	alertsMu       sync.RWMutex
+	alerts         map[string]store.AlertEvent
+	lastPrunedAt   time.Time
 }
 
 func NewIngestionService(exchangeClient exchange.ExchangeClient, candleStore store.CandleStore) *IngestionService {
@@ -171,13 +173,21 @@ func NewIngestionService(exchangeClient exchange.ExchangeClient, candleStore sto
 		topSymbols:     make([]string, 0),
 		backfillQueue:  make(chan backfillRequest, defaultBackfillQueue),
 		jobs:           make(map[string]BackfillJob),
-		alerts:         make(map[string]AlertEvent),
+		alerts:         make(map[string]store.AlertEvent),
 	}
 	s.startBackfillWorker()
 	return s
 }
 
-func (s *IngestionService) upsertAlert(key, category string, severity AlertSeverity, message, source, symbol string, active bool) {
+// SetAlertStore wires a persistent AlertStore. When set, alerts are written to
+// SQLite and read back from it; the in-memory cache is still kept for fast access
+// by syncHealthIssueAlerts. If never called, alerts live in memory only (suitable
+// for tests).
+func (s *IngestionService) SetAlertStore(as store.AlertStore) {
+	s.alertStore = as
+}
+
+func (s *IngestionService) upsertAlert(key, category string, severity store.AlertSeverity, message, source, symbol string, active bool) {
 	if key == "" {
 		return
 	}
@@ -188,7 +198,7 @@ func (s *IngestionService) upsertAlert(key, category string, severity AlertSever
 
 	existing, found := s.alerts[key]
 	if !found {
-		event := AlertEvent{
+		event := store.AlertEvent{
 			ID:        fmt.Sprintf("al_%d_%d", now.UnixMilli(), s.alertSeq.Add(1)),
 			Key:       key,
 			Category:  category,
@@ -202,6 +212,7 @@ func (s *IngestionService) upsertAlert(key, category string, severity AlertSever
 			LastSeen:  now,
 		}
 		s.alerts[key] = event
+		s.persistAlert(event)
 		return
 	}
 
@@ -222,17 +233,47 @@ func (s *IngestionService) upsertAlert(key, category string, severity AlertSever
 	}
 
 	s.alerts[key] = existing
+	s.persistAlert(existing)
 }
 
-func (s *IngestionService) recordAlert(key, category string, severity AlertSeverity, message, source, symbol string) {
+// persistAlert writes an alert to the SQLite store when one is configured.
+// It also prunes old alerts at most once per hour to enforce the retention policy.
+// Must be called with alertsMu held (or after the lock is no longer needed).
+func (s *IngestionService) persistAlert(event store.AlertEvent) {
+	if s.alertStore == nil {
+		return
+	}
+	if err := s.alertStore.UpsertAlert(event); err != nil {
+		slog.Warn("failed to persist alert", "key", event.Key, "err", err)
+	}
+
+	// Prune resolved alerts older than 30 days, at most once per hour.
+	if time.Since(s.lastPrunedAt) >= time.Hour {
+		s.lastPrunedAt = time.Now().UTC()
+		cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
+		if err := s.alertStore.PruneAlerts(cutoff); err != nil {
+			slog.Warn("failed to prune old alerts", "err", err)
+		}
+	}
+}
+
+func (s *IngestionService) recordAlert(key, category string, severity store.AlertSeverity, message, source, symbol string) {
 	s.upsertAlert(key, category, severity, message, source, symbol, true)
 }
 
 func (s *IngestionService) resolveAlert(key, category, source string) {
-	s.upsertAlert(key, category, AlertSeverityInfo, "resolved", source, "", false)
+	s.upsertAlert(key, category, store.AlertSeverityInfo, "resolved", source, "", false)
 }
 
-func (s *IngestionService) ListAlerts(limit int, activeOnly bool) []AlertEvent {
+// ListAlerts returns a page of alerts. When a persistent AlertStore is wired it
+// reads from SQLite; otherwise it falls back to the in-memory cache.
+// It returns the alerts slice, the total matching row count, and any error.
+func (s *IngestionService) ListAlerts(limit, offset int, activeOnly bool) ([]store.AlertEvent, int, error) {
+	if s.alertStore != nil {
+		return s.alertStore.ListAlerts(limit, offset, activeOnly)
+	}
+
+	// In-memory fallback (used in tests / when no persistent store is set).
 	if limit <= 0 {
 		limit = 50
 	}
@@ -241,7 +282,7 @@ func (s *IngestionService) ListAlerts(limit int, activeOnly bool) []AlertEvent {
 	}
 
 	s.alertsMu.RLock()
-	alerts := make([]AlertEvent, 0, len(s.alerts))
+	alerts := make([]store.AlertEvent, 0, len(s.alerts))
 	for _, alert := range s.alerts {
 		if activeOnly && !alert.Active {
 			continue
@@ -257,10 +298,16 @@ func (s *IngestionService) ListAlerts(limit int, activeOnly bool) []AlertEvent {
 		return alerts[i].LastSeen.After(alerts[j].LastSeen)
 	})
 
+	total := len(alerts)
+	if offset < len(alerts) {
+		alerts = alerts[offset:]
+	} else {
+		alerts = alerts[:0]
+	}
 	if len(alerts) > limit {
 		alerts = alerts[:limit]
 	}
-	return alerts
+	return alerts, total, nil
 }
 
 func (s *IngestionService) syncHealthIssueAlerts(issues []string) {
@@ -268,7 +315,7 @@ func (s *IngestionService) syncHealthIssueAlerts(issues []string) {
 	for _, issue := range issues {
 		key := "health:" + issue
 		activeKeys[key] = struct{}{}
-		s.recordAlert(key, "health", AlertSeverityWarning, issue, "system-health", "")
+		s.recordAlert(key, "health", store.AlertSeverityWarning, issue, "system-health", "")
 	}
 
 	s.alertsMu.RLock()
@@ -394,27 +441,13 @@ type BackfillJob struct {
 	Error     string           `json:"error,omitempty"`
 }
 
-type AlertSeverity string
+type AlertSeverity = store.AlertSeverity
 
 const (
-	AlertSeverityInfo     AlertSeverity = "info"
-	AlertSeverityWarning  AlertSeverity = "warning"
-	AlertSeverityCritical AlertSeverity = "critical"
+	AlertSeverityInfo     = store.AlertSeverityInfo
+	AlertSeverityWarning  = store.AlertSeverityWarning
+	AlertSeverityCritical = store.AlertSeverityCritical
 )
-
-type AlertEvent struct {
-	ID        string        `json:"id"`
-	Key       string        `json:"key"`
-	Category  string        `json:"category"`
-	Severity  AlertSeverity `json:"severity"`
-	Message   string        `json:"message"`
-	Source    string        `json:"source"`
-	Symbol    string        `json:"symbol,omitempty"`
-	Active    bool          `json:"active"`
-	Count     int           `json:"count"`
-	FirstSeen time.Time     `json:"firstSeen"`
-	LastSeen  time.Time     `json:"lastSeen"`
-}
 
 type SystemHealth struct {
 	GeneratedAt          time.Time  `json:"generatedAt"`

@@ -82,6 +82,24 @@ func (s *SQLiteStore) ensureSchema() error {
 
 	CREATE INDEX IF NOT EXISTS idx_crypto_candles_exchange_tf_open
 		ON crypto_candles(exchange, timeframe, open_time DESC);
+
+	CREATE TABLE IF NOT EXISTS alerts (
+		id TEXT NOT NULL,
+		key TEXT NOT NULL UNIQUE,
+		category TEXT NOT NULL,
+		severity TEXT NOT NULL,
+		message TEXT NOT NULL,
+		source TEXT NOT NULL,
+		symbol TEXT NOT NULL DEFAULT '',
+		active INTEGER NOT NULL DEFAULT 1,
+		count INTEGER NOT NULL DEFAULT 1,
+		first_seen TEXT NOT NULL,
+		last_seen TEXT NOT NULL,
+		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_alerts_active_last_seen
+		ON alerts(active DESC, last_seen DESC);
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to ensure schema: %w", err)
@@ -309,3 +327,123 @@ func (s *SQLiteStore) QueryDailySymbolActivity(exchangeName, timeframe string, d
 
 	return result, nil
 }
+
+// UpsertAlert inserts or updates an alert keyed by AlertEvent.Key.
+func (s *SQLiteStore) UpsertAlert(alert AlertEvent) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	_, err := s.db.Exec(`
+		INSERT INTO alerts (id, key, category, severity, message, source, symbol, active, count, first_seen, last_seen, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(key) DO UPDATE SET
+			id        = excluded.id,
+			category  = excluded.category,
+			severity  = excluded.severity,
+			message   = excluded.message,
+			source    = excluded.source,
+			symbol    = excluded.symbol,
+			active    = excluded.active,
+			count     = excluded.count,
+			last_seen = excluded.last_seen,
+			updated_at = CURRENT_TIMESTAMP;
+	`,
+		alert.ID,
+		alert.Key,
+		alert.Category,
+		string(alert.Severity),
+		alert.Message,
+		alert.Source,
+		alert.Symbol,
+		boolToInt(alert.Active),
+		alert.Count,
+		alert.FirstSeen.UTC().Format(time.RFC3339Nano),
+		alert.LastSeen.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to upsert alert: %w", err)
+	}
+	return nil
+}
+
+// ListAlerts returns a page of alerts and the total count of matching rows.
+func (s *SQLiteStore) ListAlerts(limit, offset int, activeOnly bool) ([]AlertEvent, int, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	where := ""
+	args := []any{}
+	if activeOnly {
+		where = "WHERE active = 1 "
+	}
+
+	var total int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM alerts `+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count alerts: %w", err)
+	}
+
+	rows, err := s.db.Query(
+		`SELECT id, key, category, severity, message, source, symbol, active, count, first_seen, last_seen
+		 FROM alerts `+where+`ORDER BY active DESC, last_seen DESC LIMIT ? OFFSET ?`,
+		append(args, limit, offset)...,
+	)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query alerts: %w", err)
+	}
+	defer rows.Close()
+
+	alerts := make([]AlertEvent, 0, limit)
+	for rows.Next() {
+		var a AlertEvent
+		var severity string
+		var activeInt int
+		var firstSeen, lastSeen string
+		if err := rows.Scan(&a.ID, &a.Key, &a.Category, &severity, &a.Message, &a.Source, &a.Symbol, &activeInt, &a.Count, &firstSeen, &lastSeen); err != nil {
+			return nil, 0, fmt.Errorf("failed to scan alert row: %w", err)
+		}
+		a.Severity = AlertSeverity(severity)
+		a.Active = activeInt != 0
+		if a.FirstSeen, err = time.Parse(time.RFC3339Nano, firstSeen); err != nil {
+			return nil, 0, fmt.Errorf("failed to parse alert first_seen: %w", err)
+		}
+		if a.LastSeen, err = time.Parse(time.RFC3339Nano, lastSeen); err != nil {
+			return nil, 0, fmt.Errorf("failed to parse alert last_seen: %w", err)
+		}
+		alerts = append(alerts, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("error iterating alert rows: %w", err)
+	}
+
+	return alerts, total, nil
+}
+
+// PruneAlerts removes alerts whose last_seen timestamp is older than before.
+func (s *SQLiteStore) PruneAlerts(before time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	_, err := s.db.Exec(
+		`DELETE FROM alerts WHERE last_seen < ?`,
+		before.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to prune alerts: %w", err)
+	}
+	return nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
