@@ -57,7 +57,9 @@ func main() {
 		slog.Error("failed to configure telegram notifier", "err", err)
 		return
 	} else if telegramNotifier != nil {
+		telegramNotifier.SetCommandSources(exchangeClient, candleStore)
 		ingestionService.SetAlertNotifier(telegramNotifier)
+		go telegramNotifier.Run(ctx)
 		slog.Info("telegram alert notifier enabled")
 	}
 	if err := ingestionService.RefreshUniverse(); err != nil {
