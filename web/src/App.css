@@ -18,10 +18,16 @@
 .topbar h1 {
   font-size: 2rem;
   font-weight: 800;
-  background: linear-gradient(130deg, var(--primary-deep), #e06090);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: var(--primary-deep);
+}
+
+@supports (-webkit-background-clip: text) or (background-clip: text) {
+  .topbar h1 {
+    background: linear-gradient(130deg, var(--primary-deep), #e06090);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
 }
 
 .topbar-sub {
@@ -205,10 +211,6 @@
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
-}
-
-.tasks-kpis {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .kpi-card {
@@ -832,8 +834,7 @@ tbody td {
   }
 
   .kpi-grid,
-  .overview-grid,
-  .tasks-kpis {
+  .overview-grid {
     grid-template-columns: 1fr;
   }
 
