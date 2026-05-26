@@ -11,6 +11,7 @@ import (
 
 	"karasu/internal/exchange"
 	"karasu/internal/market"
+	"karasu/internal/notification"
 	"karasu/internal/store"
 )
 
@@ -136,6 +137,7 @@ type IngestionService struct {
 	exchangeClient exchange.ExchangeClient
 	store          store.CandleStore
 	alertStore     store.AlertStore
+	alertNotifier  notification.AlertNotifier
 	liveCache      *LiveCache
 	otherBatchSize int
 	topSymbolsSize int
@@ -150,14 +152,14 @@ type IngestionService struct {
 	rateLimitBlockedUntil time.Time
 	rateLimitLastError    string
 
-	backfillQueue  chan backfillRequest
-	backfillSeq    atomic.Uint64
-	alertSeq       atomic.Uint64
-	jobsMu         sync.RWMutex
-	jobs           map[string]BackfillJob
-	alertsMu       sync.RWMutex
-	alerts         map[string]store.AlertEvent
-	lastPrunedAt   time.Time
+	backfillQueue chan backfillRequest
+	backfillSeq   atomic.Uint64
+	alertSeq      atomic.Uint64
+	jobsMu        sync.RWMutex
+	jobs          map[string]BackfillJob
+	alertsMu      sync.RWMutex
+	alerts        map[string]store.AlertEvent
+	lastPrunedAt  time.Time
 }
 
 func NewIngestionService(exchangeClient exchange.ExchangeClient, candleStore store.CandleStore) *IngestionService {
@@ -187,6 +189,10 @@ func (s *IngestionService) SetAlertStore(as store.AlertStore) {
 	s.alertStore = as
 }
 
+func (s *IngestionService) SetAlertNotifier(an notification.AlertNotifier) {
+	s.alertNotifier = an
+}
+
 func (s *IngestionService) upsertAlert(key, category string, severity store.AlertSeverity, message, source, symbol string, active bool) {
 	if key == "" {
 		return
@@ -213,12 +219,18 @@ func (s *IngestionService) upsertAlert(key, category string, severity store.Aler
 		}
 		s.alerts[key] = event
 		s.persistAlert(event)
+		s.notifyAlert(event)
 		return
 	}
 
 	bumpCount := now.Sub(existing.LastSeen) >= defaultAlertDedupWindow ||
 		existing.Message != message ||
 		existing.Severity != severity ||
+		existing.Active != active
+	shouldNotify := existing.Message != message ||
+		existing.Severity != severity ||
+		existing.Source != source ||
+		existing.Symbol != symbol ||
 		existing.Active != active
 
 	existing.Category = category
@@ -234,6 +246,9 @@ func (s *IngestionService) upsertAlert(key, category string, severity store.Aler
 
 	s.alerts[key] = existing
 	s.persistAlert(existing)
+	if shouldNotify {
+		s.notifyAlert(existing)
+	}
 }
 
 // persistAlert writes an alert to the SQLite store when one is configured.
@@ -254,6 +269,15 @@ func (s *IngestionService) persistAlert(event store.AlertEvent) {
 		if err := s.alertStore.PruneAlerts(cutoff); err != nil {
 			slog.Warn("failed to prune old alerts", "err", err)
 		}
+	}
+}
+
+func (s *IngestionService) notifyAlert(event store.AlertEvent) {
+	if s.alertNotifier == nil {
+		return
+	}
+	if err := s.alertNotifier.NotifyAlert(event); err != nil {
+		slog.Warn("failed to send alert notification", "key", event.Key, "err", err)
 	}
 }
 
