@@ -1,11 +1,17 @@
 :root {
-  --bg: #edf2f7;
-  --panel-bg: #fcfdff;
-  --ink-strong: #1f2937;
-  --ink-soft: #64748b;
-  --stroke: #d9e1ea;
-  --headline: 'Space Grotesk', 'Avenir Next', 'Segoe UI', sans-serif;
-  --body: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+  --bg: #fdf4ff;
+  --panel-bg: #ffffff;
+  --primary: #c8a8f0;
+  --primary-deep: #9b7fd4;
+  --accent-pink: #f5b8d0;
+  --accent-mint: #a8e6cf;
+  --accent-peach: #ffd4a8;
+  --ink-strong: #4a3758;
+  --ink-soft: #9b8eb0;
+  --stroke: #ead8f8;
+  --positive: #5cc8a0;
+  --negative: #f07898;
+  --font: 'Nunito', 'Segoe UI', sans-serif;
 }
 
 * {
@@ -15,11 +21,12 @@
 body {
   margin: 0;
   color: var(--ink-strong);
-  font-family: var(--body);
+  font-family: var(--font);
   background:
-    radial-gradient(circle at 15% 20%, rgba(14, 116, 144, 0.14), transparent 38%),
-    radial-gradient(circle at 85% 5%, rgba(251, 146, 60, 0.13), transparent 35%),
-    linear-gradient(160deg, #eaf0f7 0%, #f6f8fb 55%, #eef3f8 100%);
+    radial-gradient(circle at 10% 15%, rgba(200, 168, 240, 0.22), transparent 40%),
+    radial-gradient(circle at 88% 8%, rgba(245, 184, 208, 0.2), transparent 38%),
+    radial-gradient(circle at 50% 90%, rgba(168, 230, 207, 0.15), transparent 45%),
+    linear-gradient(160deg, #fdf4ff 0%, #fff8ff 55%, #f8f0ff 100%);
 }
 
 #root {
@@ -28,9 +35,12 @@ body {
 
 h1,
 h2,
-h3 {
+h3,
+h4,
+h5 {
   margin: 0;
-  font-family: var(--headline);
+  font-family: var(--font);
+  font-weight: 800;
 }
 
 p {
