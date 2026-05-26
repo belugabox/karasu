@@ -1,0 +1,24 @@
+services:
+  karasu:
+    # Pin to a specific tag (e.g. v1.0.0 or a short SHA) for reproducible deployments.
+    image: ghcr.io/belugabox/karasu:${KARASU_IMAGE_TAG:-main}
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      PORT: "8080"
+      KARASU_DB_PATH: /data/karasu.db
+      BITVAVO_API_KEY: ${BITVAVO_API_KEY}
+      BITVAVO_API_SECRET: ${BITVAVO_API_SECRET}
+      # Optional – defaults are shown below; remove or override as needed
+      KARASU_REFRESH_UNIVERSE_INTERVAL: ${KARASU_REFRESH_UNIVERSE_INTERVAL:-15m}
+      KARASU_INGEST_TOP_INTERVAL: ${KARASU_INGEST_TOP_INTERVAL:-1m}
+      KARASU_INGEST_OTHER_INTERVAL: ${KARASU_INGEST_OTHER_INTERVAL:-5m}
+      KARASU_GAP_REPAIR_INTERVAL: ${KARASU_GAP_REPAIR_INTERVAL:-3m}
+      KARASU_INGEST_REPAIR_LOOKBACK: ${KARASU_INGEST_REPAIR_LOOKBACK:-6h}
+      KARASU_BACKFILL_CHUNK: ${KARASU_BACKFILL_CHUNK:-12h}
+    volumes:
+      - karasu-data:/data
+
+volumes:
+  karasu-data:
