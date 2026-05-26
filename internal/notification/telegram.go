@@ -80,8 +80,8 @@ func (n *TelegramAlertNotifier) endpoint() string {
 func formatTelegramAlert(alert store.AlertEvent) string {
 	lines := []string{
 		fmt.Sprintf("%s Karasu %s", telegramAlertPrefix(alert), telegramAlertState(alert)),
-		fmt.Sprintf("Categorie: %s", alert.Category),
-		fmt.Sprintf("Severite: %s", alert.Severity),
+		fmt.Sprintf("Catégorie: %s", alert.Category),
+		fmt.Sprintf("Sévérité: %s", alert.Severity),
 		fmt.Sprintf("Source: %s", alert.Source),
 	}
 
@@ -93,8 +93,8 @@ func formatTelegramAlert(alert store.AlertEvent) string {
 		lines,
 		fmt.Sprintf("Message: %s", alert.Message),
 		fmt.Sprintf("Occurrences: %d", alert.Count),
-		fmt.Sprintf("Premiere apparition: %s", alert.FirstSeen.UTC().Format(time.RFC3339)),
-		fmt.Sprintf("Derniere apparition: %s", alert.LastSeen.UTC().Format(time.RFC3339)),
+		fmt.Sprintf("Première apparition: %s", alert.FirstSeen.UTC().Format(time.RFC3339)),
+		fmt.Sprintf("Dernière apparition: %s", alert.LastSeen.UTC().Format(time.RFC3339)),
 	)
 
 	return strings.Join(lines, "\n")

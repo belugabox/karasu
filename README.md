@@ -82,7 +82,7 @@ Principes:
 Variable d'environnement:
 
 - `KARASU_DB_PATH` (optionnel, defaut: `./karasu.db`)
-- `KARASU_TELEGRAM_BOT_TOKEN` + `KARASU_TELEGRAM_CHAT_ID` (optionnels, activent l'envoi des alertes dedoublonnees vers Telegram)
+- `KARASU_TELEGRAM_BOT_TOKEN` + `KARASU_TELEGRAM_CHAT_ID` (optionnels, activent l'envoi des alertes dédoublonnées vers Telegram)
 - `KARASU_REFRESH_UNIVERSE_INTERVAL` (optionnel, defaut: `15m`)
 - `KARASU_INGEST_TOP_INTERVAL` (optionnel, defaut: `1m`)
 - `KARASU_INGEST_OTHER_INTERVAL` (optionnel, defaut: `5m`)
@@ -121,10 +121,10 @@ Les durees utilisent le format Go (`30s`, `1m`, `5m`, `1h`).
 
 ## Telegram
 
-Si `KARASU_TELEGRAM_BOT_TOKEN` et `KARASU_TELEGRAM_CHAT_ID` sont renseignes, Karasu pousse les transitions d'alertes dedoublonnees vers Telegram :
+Si `KARASU_TELEGRAM_BOT_TOKEN` et `KARASU_TELEGRAM_CHAT_ID` sont renseignés, Karasu pousse les transitions d'alertes dédoublonnées vers Telegram :
 
 - apparition d'une nouvelle alerte
-- changement de severite, message, source ou symbole
+- changement de sévérité, message, source ou symbole
 - resolution d'une alerte
 
 ## Roadmap
