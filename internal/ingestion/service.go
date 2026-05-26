@@ -15,11 +15,13 @@ import (
 )
 
 const (
-	defaultTopSymbolsCount = 30
-	defaultOtherBatchSize  = 80
-	defaultRepairLookback  = 6 * time.Hour
-	defaultBackfillChunk   = 12 * time.Hour
-	defaultBackfillQueue   = 128
+	defaultTopSymbolsCount   = 30
+	defaultOtherBatchSize    = 80
+	defaultRepairLookback    = 6 * time.Hour
+	defaultBackfillChunk     = 12 * time.Hour
+	defaultBackfillQueue     = 128
+	defaultRateLimitCooldown = 30 * time.Minute
+	defaultAlertDedupWindow  = 5 * time.Minute
 )
 
 // LiveCandle is a real-time candle snapshot served by /api/live-1m.
@@ -100,6 +102,21 @@ func (c *LiveCache) Snapshot(symbols []string, limit int) []LiveCandle {
 	return res
 }
 
+func (c *LiveCache) Stats() (count int, latestUpdatedAt time.Time, hasData bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	count = len(c.latest)
+	for _, entry := range c.latest {
+		if !hasData || entry.updatedAt.After(latestUpdatedAt) {
+			latestUpdatedAt = entry.updatedAt
+			hasData = true
+		}
+	}
+
+	return count, latestUpdatedAt, hasData
+}
+
 func toLiveCandle(symbol string, entry liveEntry) LiveCandle {
 	return LiveCandle{
 		Symbol:    symbol,
@@ -125,15 +142,20 @@ type IngestionService struct {
 	backfillChunk  time.Duration
 	backfillMu     sync.Mutex
 
-	mu          sync.RWMutex
-	allSymbols  []string
-	topSymbols  []string
-	otherCursor int
+	mu                    sync.RWMutex
+	allSymbols            []string
+	topSymbols            []string
+	otherCursor           int
+	rateLimitBlockedUntil time.Time
+	rateLimitLastError    string
 
 	backfillQueue chan backfillRequest
 	backfillSeq   atomic.Uint64
+	alertSeq      atomic.Uint64
 	jobsMu        sync.RWMutex
 	jobs          map[string]BackfillJob
+	alertsMu      sync.RWMutex
+	alerts        map[string]AlertEvent
 }
 
 func NewIngestionService(exchangeClient exchange.ExchangeClient, candleStore store.CandleStore) *IngestionService {
@@ -149,9 +171,121 @@ func NewIngestionService(exchangeClient exchange.ExchangeClient, candleStore sto
 		topSymbols:     make([]string, 0),
 		backfillQueue:  make(chan backfillRequest, defaultBackfillQueue),
 		jobs:           make(map[string]BackfillJob),
+		alerts:         make(map[string]AlertEvent),
 	}
 	s.startBackfillWorker()
 	return s
+}
+
+func (s *IngestionService) upsertAlert(key, category string, severity AlertSeverity, message, source, symbol string, active bool) {
+	if key == "" {
+		return
+	}
+
+	now := time.Now().UTC()
+	s.alertsMu.Lock()
+	defer s.alertsMu.Unlock()
+
+	existing, found := s.alerts[key]
+	if !found {
+		event := AlertEvent{
+			ID:        fmt.Sprintf("al_%d_%d", now.UnixMilli(), s.alertSeq.Add(1)),
+			Key:       key,
+			Category:  category,
+			Severity:  severity,
+			Message:   message,
+			Source:    source,
+			Symbol:    symbol,
+			Active:    active,
+			Count:     1,
+			FirstSeen: now,
+			LastSeen:  now,
+		}
+		s.alerts[key] = event
+		return
+	}
+
+	bumpCount := now.Sub(existing.LastSeen) >= defaultAlertDedupWindow ||
+		existing.Message != message ||
+		existing.Severity != severity ||
+		existing.Active != active
+
+	existing.Category = category
+	existing.Severity = severity
+	existing.Message = message
+	existing.Source = source
+	existing.Symbol = symbol
+	existing.Active = active
+	existing.LastSeen = now
+	if bumpCount {
+		existing.Count++
+	}
+
+	s.alerts[key] = existing
+}
+
+func (s *IngestionService) recordAlert(key, category string, severity AlertSeverity, message, source, symbol string) {
+	s.upsertAlert(key, category, severity, message, source, symbol, true)
+}
+
+func (s *IngestionService) resolveAlert(key, category, source string) {
+	s.upsertAlert(key, category, AlertSeverityInfo, "resolved", source, "", false)
+}
+
+func (s *IngestionService) ListAlerts(limit int, activeOnly bool) []AlertEvent {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	s.alertsMu.RLock()
+	alerts := make([]AlertEvent, 0, len(s.alerts))
+	for _, alert := range s.alerts {
+		if activeOnly && !alert.Active {
+			continue
+		}
+		alerts = append(alerts, alert)
+	}
+	s.alertsMu.RUnlock()
+
+	sort.SliceStable(alerts, func(i, j int) bool {
+		if alerts[i].Active != alerts[j].Active {
+			return alerts[i].Active
+		}
+		return alerts[i].LastSeen.After(alerts[j].LastSeen)
+	})
+
+	if len(alerts) > limit {
+		alerts = alerts[:limit]
+	}
+	return alerts
+}
+
+func (s *IngestionService) syncHealthIssueAlerts(issues []string) {
+	activeKeys := make(map[string]struct{}, len(issues))
+	for _, issue := range issues {
+		key := "health:" + issue
+		activeKeys[key] = struct{}{}
+		s.recordAlert(key, "health", AlertSeverityWarning, issue, "system-health", "")
+	}
+
+	s.alertsMu.RLock()
+	healthKeys := make([]string, 0)
+	for key := range s.alerts {
+		if strings.HasPrefix(key, "health:") {
+			healthKeys = append(healthKeys, key)
+		}
+	}
+	s.alertsMu.RUnlock()
+
+	for _, key := range healthKeys {
+		if _, stillActive := activeKeys[key]; stillActive {
+			continue
+		}
+		s.resolveAlert(key, "health", "system-health")
+	}
 }
 
 func (s *IngestionService) SetRepairLookback(duration time.Duration) error {
@@ -172,6 +306,58 @@ func (s *IngestionService) SetBackfillChunk(duration time.Duration) error {
 	s.backfillChunk = duration
 	s.mu.Unlock()
 	return nil
+}
+
+func isRateLimitBanError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "errorcode:105") ||
+		(strings.Contains(message, "rate limit") && strings.Contains(message, "banned"))
+}
+
+func (s *IngestionService) setRateLimitCooldown(err error) {
+	until := time.Now().UTC().Add(defaultRateLimitCooldown)
+	s.mu.Lock()
+	if s.rateLimitBlockedUntil.Before(until) {
+		s.rateLimitBlockedUntil = until
+	}
+	if err != nil {
+		s.rateLimitLastError = err.Error()
+	}
+	s.mu.Unlock()
+	slog.Warn("rate limit cooldown activated", "until", until, "cooldown", defaultRateLimitCooldown.String(), "err", err)
+	s.recordAlert(
+		"exchange:rate-limit-ban",
+		"exchange",
+		AlertSeverityCritical,
+		fmt.Sprintf("rate limit active until %s", until.Format(time.RFC3339)),
+		"exchange",
+		"",
+	)
+}
+
+func (s *IngestionService) rateLimitStatus() (bool, time.Time, string) {
+	s.mu.RLock()
+	blockedUntil := s.rateLimitBlockedUntil
+	lastErr := s.rateLimitLastError
+	s.mu.RUnlock()
+	if blockedUntil.IsZero() {
+		return false, time.Time{}, lastErr
+	}
+	if time.Now().UTC().After(blockedUntil) {
+		return false, blockedUntil, lastErr
+	}
+	return true, blockedUntil, lastErr
+}
+
+func (s *IngestionService) clearRateLimitCooldown() {
+	s.mu.Lock()
+	s.rateLimitBlockedUntil = time.Time{}
+	s.rateLimitLastError = ""
+	s.mu.Unlock()
+	s.resolveAlert("exchange:rate-limit-ban", "exchange", "exchange")
 }
 
 // BackfillReport summarises the result of a Backfill5m run.
@@ -206,6 +392,48 @@ type BackfillJob struct {
 	EndedAt   *time.Time       `json:"endedAt,omitempty"`
 	Report    *BackfillReport  `json:"report,omitempty"`
 	Error     string           `json:"error,omitempty"`
+}
+
+type AlertSeverity string
+
+const (
+	AlertSeverityInfo     AlertSeverity = "info"
+	AlertSeverityWarning  AlertSeverity = "warning"
+	AlertSeverityCritical AlertSeverity = "critical"
+)
+
+type AlertEvent struct {
+	ID        string        `json:"id"`
+	Key       string        `json:"key"`
+	Category  string        `json:"category"`
+	Severity  AlertSeverity `json:"severity"`
+	Message   string        `json:"message"`
+	Source    string        `json:"source"`
+	Symbol    string        `json:"symbol,omitempty"`
+	Active    bool          `json:"active"`
+	Count     int           `json:"count"`
+	FirstSeen time.Time     `json:"firstSeen"`
+	LastSeen  time.Time     `json:"lastSeen"`
+}
+
+type SystemHealth struct {
+	GeneratedAt          time.Time  `json:"generatedAt"`
+	IsHealthy            bool       `json:"isHealthy"`
+	Issues               []string   `json:"issues"`
+	UniverseSymbols      int        `json:"universeSymbols"`
+	TopSymbols           int        `json:"topSymbols"`
+	LiveSymbols          int        `json:"liveSymbols"`
+	LiveLastUpdatedAt    *time.Time `json:"liveLastUpdatedAt,omitempty"`
+	LiveFresh            bool       `json:"liveFresh"`
+	StaleThresholdMin    int        `json:"staleThresholdMin"`
+	TopSymbolsStale5m    int        `json:"topSymbolsStale5m"`
+	TopStaleExamples     []string   `json:"topStaleExamples"`
+	StoreReadErrors      int        `json:"storeReadErrors"`
+	BackfillQueueDepth   int        `json:"backfillQueueDepth"`
+	BackfillQueueCap     int        `json:"backfillQueueCap"`
+	BackfillQueuedJobs   int        `json:"backfillQueuedJobs"`
+	BackfillRunningJobs  int        `json:"backfillRunningJobs"`
+	BackfillFailedJobs24 int        `json:"backfillFailedJobs24h"`
 }
 
 type backfillRequest struct {
@@ -315,9 +543,18 @@ func (s *IngestionService) startBackfillWorker() {
 			if err != nil {
 				job.State = BackfillFailed
 				job.Error = err.Error()
+				s.recordAlert(
+					"backfill:failed",
+					"backfill",
+					AlertSeverityWarning,
+					fmt.Sprintf("backfill failed for job %s: %v", req.JobID, err),
+					"backfill-worker",
+					"",
+				)
 			} else {
 				job.State = BackfillDone
 				job.Error = ""
+				s.resolveAlert("backfill:failed", "backfill", "backfill-worker")
 			}
 			s.jobs[req.JobID] = job
 			s.jobsMu.Unlock()
@@ -398,6 +635,10 @@ func (s *IngestionService) RepairDetectedGaps() error {
 }
 
 func (s *IngestionService) Backfill5m(symbols []string, from, to time.Time) (BackfillReport, error) {
+	if blocked, until, _ := s.rateLimitStatus(); blocked {
+		return BackfillReport{}, fmt.Errorf("backfill paused until %s because exchange rate limit is active", until.Format(time.RFC3339))
+	}
+
 	startedAt := time.Now()
 	from = from.UTC().Truncate(time.Minute)
 	to = to.UTC().Truncate(time.Minute)
@@ -436,6 +677,13 @@ func (s *IngestionService) Backfill5m(symbols []string, from, to time.Time) (Bac
 
 			bundle, err := s.exchangeClient.Candles(symbol, cursor, chunkEnd, exchange.Interval1m)
 			if err != nil {
+				if isRateLimitBanError(err) {
+					s.setRateLimitCooldown(err)
+					if firstErr == nil {
+						firstErr = err
+					}
+					break
+				}
 				slog.Warn("backfill fetch failed", "symbol", symbol, "from", cursor, "to", chunkEnd, "err", err)
 				if firstErr == nil {
 					firstErr = err
@@ -501,10 +749,26 @@ func (s *IngestionService) Backfill5m(symbols []string, from, to time.Time) (Bac
 }
 
 func (s *IngestionService) RefreshUniverse() error {
+	if blocked, until, lastErr := s.rateLimitStatus(); blocked {
+		if len(s.getAllSymbols()) > 0 {
+			slog.Warn("refresh universe skipped due to active rate limit cooldown", "until", until, "lastErr", lastErr)
+			return nil
+		}
+		return fmt.Errorf("failed to refresh universe: exchange cooldown active until %s", until.Format(time.RFC3339))
+	}
+
 	bundles, err := s.exchangeClient.CandlesLast24h()
 	if err != nil {
+		if isRateLimitBanError(err) {
+			s.setRateLimitCooldown(err)
+			if len(s.getAllSymbols()) > 0 {
+				slog.Warn("refresh universe failed on rate limit, reusing cached universe", "err", err)
+				return nil
+			}
+		}
 		return fmt.Errorf("failed to refresh universe: %w", err)
 	}
+	s.clearRateLimitCooldown()
 
 	symbols := make([]string, 0, len(bundles))
 	for _, bundle := range bundles {
@@ -602,6 +866,11 @@ func (s *IngestionService) RefreshUniverse() error {
 }
 
 func (s *IngestionService) IngestTopSymbols() error {
+	if blocked, until, _ := s.rateLimitStatus(); blocked {
+		slog.Warn("ingest top symbols skipped due to active rate limit cooldown", "until", until)
+		return nil
+	}
+
 	symbols := s.getTopSymbols()
 	if len(symbols) == 0 {
 		if err := s.RefreshUniverse(); err != nil {
@@ -616,6 +885,11 @@ func (s *IngestionService) IngestTopSymbols() error {
 }
 
 func (s *IngestionService) IngestOtherSymbols() error {
+	if blocked, until, _ := s.rateLimitStatus(); blocked {
+		slog.Warn("ingest other symbols skipped due to active rate limit cooldown", "until", until)
+		return nil
+	}
+
 	allSymbols := s.getAllSymbols()
 	if len(allSymbols) == 0 {
 		if err := s.RefreshUniverse(); err != nil {
@@ -663,7 +937,119 @@ func (s *IngestionService) LiveCandles(symbols []string, limit int) []LiveCandle
 	return s.liveCache.Snapshot(normalized, limit)
 }
 
+func (s *IngestionService) SystemHealthSnapshot(staleThreshold time.Duration) SystemHealth {
+	if staleThreshold <= 0 {
+		staleThreshold = 20 * time.Minute
+	}
+
+	now := time.Now().UTC()
+	allSymbols := s.getAllSymbols()
+	topSymbols := s.getTopSymbols()
+
+	liveCount, liveLatest, hasLive := s.liveCache.Stats()
+	liveFresh := hasLive && now.Sub(liveLatest) <= staleThreshold
+
+	topStaleCount := 0
+	storeReadErrors := 0
+	topStaleExamples := make([]string, 0, 5)
+
+	for _, symbol := range topSymbols {
+		lastOpen, found, err := s.store.LastCandleOpenTime("bitvavo", symbol, "5m")
+		if err != nil {
+			storeReadErrors++
+			continue
+		}
+		if !found {
+			topStaleCount++
+			if len(topStaleExamples) < cap(topStaleExamples) {
+				topStaleExamples = append(topStaleExamples, symbol+":missing")
+			}
+			continue
+		}
+
+		expectedNext := lastOpen.UTC().Add(5 * time.Minute)
+		if now.Sub(expectedNext) > staleThreshold {
+			topStaleCount++
+			if len(topStaleExamples) < cap(topStaleExamples) {
+				topStaleExamples = append(topStaleExamples, fmt.Sprintf("%s:%dm", symbol, int(now.Sub(expectedNext).Minutes())))
+			}
+		}
+	}
+
+	jobs := s.ListBackfillJobs(200)
+	queuedJobs := 0
+	runningJobs := 0
+	failed24h := 0
+	for _, job := range jobs {
+		switch job.State {
+		case BackfillQueued:
+			queuedJobs++
+		case BackfillRunning:
+			runningJobs++
+		case BackfillFailed:
+			if now.Sub(job.CreatedAt) <= 24*time.Hour {
+				failed24h++
+			}
+		}
+	}
+
+	issues := make([]string, 0, 6)
+	if blocked, until, _ := s.rateLimitStatus(); blocked {
+		issues = append(issues, fmt.Sprintf("exchange en cooldown rate limit jusqu a %s", until.Format(time.RFC3339)))
+	}
+	if len(allSymbols) == 0 {
+		issues = append(issues, "univers vide")
+	}
+	if len(topSymbols) == 0 {
+		issues = append(issues, "top symbols vide")
+	}
+	if !liveFresh {
+		issues = append(issues, "flux live 1m stale")
+	}
+	if topStaleCount > 0 {
+		issues = append(issues, fmt.Sprintf("%d symboles top en retard 5m", topStaleCount))
+	}
+	if storeReadErrors > 0 {
+		issues = append(issues, fmt.Sprintf("%d erreurs de lecture store", storeReadErrors))
+	}
+	if failed24h > 0 {
+		issues = append(issues, fmt.Sprintf("%d jobs backfill echoues sur 24h", failed24h))
+	}
+	s.syncHealthIssueAlerts(issues)
+
+	var liveLastUpdatedAt *time.Time
+	if hasLive {
+		live := liveLatest
+		liveLastUpdatedAt = &live
+	}
+
+	return SystemHealth{
+		GeneratedAt:          now,
+		IsHealthy:            len(issues) == 0,
+		Issues:               issues,
+		UniverseSymbols:      len(allSymbols),
+		TopSymbols:           len(topSymbols),
+		LiveSymbols:          liveCount,
+		LiveLastUpdatedAt:    liveLastUpdatedAt,
+		LiveFresh:            liveFresh,
+		StaleThresholdMin:    int(staleThreshold / time.Minute),
+		TopSymbolsStale5m:    topStaleCount,
+		TopStaleExamples:     topStaleExamples,
+		StoreReadErrors:      storeReadErrors,
+		BackfillQueueDepth:   len(s.backfillQueue),
+		BackfillQueueCap:     cap(s.backfillQueue),
+		BackfillQueuedJobs:   queuedJobs,
+		BackfillRunningJobs:  runningJobs,
+		BackfillFailedJobs24: failed24h,
+	}
+}
+
 func (s *IngestionService) ingestSymbols(symbols []string) error {
+	if blocked, until, _ := s.rateLimitStatus(); blocked {
+		slog.Warn("ingestion batch skipped due to active rate limit cooldown", "until", until)
+		return nil
+	}
+
 	minuteEnd := time.Now().UTC().Truncate(time.Minute)
 	defaultStart := minuteEnd.Add(-15 * time.Minute)
 	fiveMinuteFloor := time.Now().UTC().Truncate(5 * time.Minute)
@@ -695,6 +1081,13 @@ func (s *IngestionService) ingestSymbols(symbols []string) error {
 
 		bundle, err := s.exchangeClient.Candles(symbol, start, minuteEnd, exchange.Interval1m)
 		if err != nil {
+			if isRateLimitBanError(err) {
+				s.setRateLimitCooldown(err)
+				if firstErr == nil {
+					firstErr = err
+				}
+				break
+			}
 			slog.Warn("failed to fetch 1m candles", "symbol", symbol, "err", err)
 			if firstErr == nil {
 				firstErr = err

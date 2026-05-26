@@ -31,7 +31,7 @@ func NewRouter(
 		DefaultLevel: slog.LevelDebug,
 	}))
 
-	handlers.RegisterMarkets(router, exchangeClient)
+	handlers.RegisterMarkets(router, exchangeClient, candleStore)
 	handlers.RegisterCandles(router, ingestionService, candleStore)
 	handlers.RegisterBackfill(router, ingestionService)
 	handlers.RegisterWallet(router, exchangeClient)

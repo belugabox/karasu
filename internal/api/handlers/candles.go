@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"karasu/internal/ingestion"
 	"karasu/internal/store"
@@ -88,6 +89,32 @@ func RegisterCandles(r *gin.Engine, ingestionService *ingestion.IngestionService
 			"timeframe": timeframe,
 			"count":     len(activity),
 			"days":      activity,
+		})
+	})
+
+	r.GET("/api/system-health", func(c *gin.Context) {
+		staleThresholdMin, err := strconv.Atoi(c.DefaultQuery("staleThresholdMin", "20"))
+		if err != nil || staleThresholdMin <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid staleThresholdMin"})
+			return
+		}
+
+		health := ingestionService.SystemHealthSnapshot(time.Duration(staleThresholdMin) * time.Minute)
+		c.JSON(http.StatusOK, health)
+	})
+
+	r.GET("/api/alerts/recent", func(c *gin.Context) {
+		limit, err := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		if err != nil || limit <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+			return
+		}
+
+		activeOnly := strings.EqualFold(strings.TrimSpace(c.DefaultQuery("activeOnly", "false")), "true")
+		alerts := ingestionService.ListAlerts(limit, activeOnly)
+		c.JSON(http.StatusOK, gin.H{
+			"count":  len(alerts),
+			"alerts": alerts,
 		})
 	})
 }

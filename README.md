@@ -95,6 +95,18 @@ Les durees utilisent le format Go (`30s`, `1m`, `5m`, `1h`).
 - `GET /api/markets`
 	- top marchés classes (liquidite/momentum)
 
+- `GET /api/opportunities?limit=15`
+	- retourne les opportunites priorisees par score metier
+	- inclut resume, action primaire, convergence, fraicheur, raisons et risques
+
+- `GET /api/system-health?staleThresholdMin=20`
+	- retourne un snapshot de sante systeme (fraicheur live, retards 5m, etat backfill)
+	- inclut une liste d'issues actionnables si le systeme est degrade
+
+- `GET /api/alerts/recent?limit=50&activeOnly=false`
+	- retourne l'historique recent des alertes dedoublonnees (exchange, health, backfill)
+	- `activeOnly=true` pour filtrer uniquement les alertes actives
+
 - `GET /api/live-1m?symbols=BTC,ETH&limit=20`
 	- retourne le dernier snapshot 1m en memoire
 
@@ -105,3 +117,7 @@ Les durees utilisent le format Go (`30s`, `1m`, `5m`, `1h`).
 	- lance un backfill longue plage en agregant du 1m vers 5m
 	- `from` et `to` acceptent RFC3339 ou unix milliseconds
 	- si `symbols` est omis, le backfill cible tout l'univers courant
+
+## Roadmap
+
+La roadmap quasi production et le decoupage par sprint sont decrits dans `docs/roadmap-quasi-production.md`.
