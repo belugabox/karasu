@@ -18,8 +18,9 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy the rest of the source (excluding web/ – handled below)
-COPY . .
+# Copy the Go source (web/ excluded – frontend build injected below)
+COPY main.go static.go ./
+COPY internal/ ./internal/
 
 # Inject the frontend build produced by stage 1
 COPY --from=frontend-builder /app/web/dist ./web/dist

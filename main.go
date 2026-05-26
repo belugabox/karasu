@@ -34,8 +34,7 @@ func main() {
 	slog.SetDefault(slog.New(consoleWithPrefix))
 
 	if err := godotenv.Load(".env"); err != nil {
-		slog.Error("no .env file found, relying on environment variables", "err", err)
-		return
+		slog.Warn("no .env file found, relying on environment variables", "err", err)
 	}
 
 	exchangeClient, err := exchange.NewBitvavoClient()
