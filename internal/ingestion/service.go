@@ -223,15 +223,14 @@ func (s *IngestionService) upsertAlert(key, category string, severity store.Aler
 		return
 	}
 
-	bumpCount := now.Sub(existing.LastSeen) >= defaultAlertDedupWindow ||
+	changed := existing.Category != category ||
 		existing.Message != message ||
-		existing.Severity != severity ||
-		existing.Active != active
-	shouldNotify := existing.Message != message ||
 		existing.Severity != severity ||
 		existing.Source != source ||
 		existing.Symbol != symbol ||
 		existing.Active != active
+	bumpCount := now.Sub(existing.LastSeen) >= defaultAlertDedupWindow || changed
+	shouldNotify := changed
 
 	existing.Category = category
 	existing.Severity = severity
