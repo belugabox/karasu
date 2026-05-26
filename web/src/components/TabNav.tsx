@@ -1,15 +1,13 @@
-type AppTab = 'wallet' | 'markets' | 'alerts' | 'tasks'
+type AppTab = 'wallet' | 'markets'
 
 type TabNavProps = {
   activeTab: AppTab
   onChange: (tab: AppTab) => void
 }
 
-const tabs: Array<{ id: AppTab; label: string }> = [
-  { id: 'wallet', label: 'Portefeuille' },
-  { id: 'markets', label: 'Marches' },
-  { id: 'alerts', label: 'Alertes' },
-  { id: 'tasks', label: 'Taches' },
+const tabs: Array<{ id: AppTab; label: string; emoji: string }> = [
+  { id: 'wallet', label: 'Portefeuille', emoji: '💜' },
+  { id: 'markets', label: 'Marchés', emoji: '🌸' },
 ]
 
 export function TabNav({ activeTab, onChange }: TabNavProps) {
@@ -22,7 +20,7 @@ export function TabNav({ activeTab, onChange }: TabNavProps) {
           className={activeTab === tab.id ? 'tab-button active' : 'tab-button'}
           onClick={() => onChange(tab.id)}
         >
-          {tab.label}
+          {tab.emoji} {tab.label}
         </button>
       ))}
     </nav>
