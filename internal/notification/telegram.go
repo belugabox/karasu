@@ -66,7 +66,10 @@ func (n *TelegramAlertNotifier) NotifyAlert(alert store.AlertEvent) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		if readErr != nil {
+			return fmt.Errorf("telegram send failed: status=%d read_body_err=%w", resp.StatusCode, readErr)
+		}
 		return fmt.Errorf("telegram send failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
 	}
 
