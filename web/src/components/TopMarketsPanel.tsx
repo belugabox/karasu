@@ -582,6 +582,11 @@ export function TopMarketsPanel() {
 
   return (
     <section className="panel">
+      {error && opportunitiesError && (
+        <div className="degraded-banner">
+          Connexion au backend impossible — les donnees affichees peuvent etre obsoletes ou indisponibles.
+        </div>
+      )}
       <section className="scanner-panel">
         <div className="panel-head scanner-head">
           <div>

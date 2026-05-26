@@ -119,9 +119,7 @@ export function TasksPanel() {
             {jobs.map((job) => {
               const startedMs = job.startedAt ? Date.parse(job.startedAt) : 0
               const endedMs = job.endedAt ? Date.parse(job.endedAt) : 0
-              const durationMs =
-                job.report?.durationMs ??
-                (startedMs > 0 ? (endedMs > 0 ? endedMs - startedMs : Date.now() - startedMs) : 0)
+              const durationMs = job.report?.durationMs ?? (startedMs > 0 && endedMs > 0 ? endedMs - startedMs : 0)
 
               return (
                 <tr key={job.id}>
@@ -133,7 +131,7 @@ export function TasksPanel() {
                   <td>{job.createdAt ? new Date(job.createdAt).toLocaleString() : '-'}</td>
                   <td>{job.startedAt ? new Date(job.startedAt).toLocaleString() : '-'}</td>
                   <td>{job.endedAt ? new Date(job.endedAt).toLocaleString() : '-'}</td>
-                  <td>{formatDurationMs(durationMs)}</td>
+                  <td>{job.endedAt || !job.startedAt ? formatDurationMs(durationMs) : 'en cours...'}</td>
                   <td>
                     {job.error
                       ? `Erreur : ${job.error}`
