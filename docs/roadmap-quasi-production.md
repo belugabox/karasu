@@ -18,7 +18,7 @@ Karasu est considere quasi production quand :
 
 ### Sprint 1 - Moteur d'opportunites backend
 
-Statut : En cours
+Statut : Termine
 
 Objectif : creer une couche backend orientee decision sans casser l'API actuelle.
 
@@ -38,7 +38,7 @@ Definition of done :
 
 ### Sprint 2 - Scanner operable frontend
 
-Statut : En cours
+Statut : Termine
 
 Objectif : afficher les opportunites priorisees dans une vue scanner rapide.
 
@@ -63,7 +63,7 @@ Definition of done :
 
 ### Sprint 3 - Alertes et observabilite
 
-Statut : En cours
+Statut : Termine
 
 Objectif : rendre le systeme surveillable et moins dependant de la lecture manuelle.
 
@@ -91,7 +91,7 @@ Definition of done :
 
 ### Sprint 4 - Durcissement final
 
-Statut : A faire
+Statut : Termine
 
 Objectif : fiabiliser l'experience et reduire le risque de regression.
 
@@ -101,6 +101,15 @@ Livrables :
 2. contrats de payload entre backend et frontend
 3. gestion explicite des erreurs et des etats degradés
 4. ajustements mobile et lisibilite finale
+
+Avancement :
+
+1. tests d'integration sur tous les handlers HTTP (`/api/markets`, `/api/opportunities`, `/api/markets/:symbol/analysis`, `/api/markets/:symbol/signals`, `/api/live-1m`, `/api/candles-5m`, `/api/system-health`, `/api/alerts/recent`, `/api/wallet`, `/api/backfill-5m`, `/api/backfill-status`, `/api/backfill-jobs`) — payload shapes et codes HTTP verifies
+2. fakes `ExchangeClient` et `CandleStore` isoles pour chaque groupe de tests
+3. banniere degradee affichee en UI quand le backend ne repond plus sur les deux endpoints principaux
+4. `scanner-card-grid` corrige en 1 colonne sur mobile
+5. tableaux plus lisibles sur petit ecran (police reduite, colonnes de detail masquees)
+6. correction lint : `Date.now()` impure retire du contexte JSX dans `TasksPanel`
 
 Definition of done :
 
