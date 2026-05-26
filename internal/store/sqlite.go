@@ -399,7 +399,14 @@ func (s *SQLiteStore) ListAlerts(limit, offset int, activeOnly bool) ([]AlertEve
 	}
 	defer rows.Close()
 
-	alerts := make([]AlertEvent, 0, limit)
+	capacity := total - offset
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > limit {
+		capacity = limit
+	}
+	alerts := make([]AlertEvent, 0, capacity)
 	for rows.Next() {
 		var a AlertEvent
 		var severity string
