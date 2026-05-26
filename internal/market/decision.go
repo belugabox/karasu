@@ -14,10 +14,10 @@ type WalletDecisionItem struct {
 }
 
 type WalletDecision struct {
-	Reduce      []WalletDecisionItem
-	Watch       []WalletDecisionItem
-	Reinforce   []WalletDecisionItem
-	SellNowCount int
+	Reduce        []WalletDecisionItem
+	Watch         []WalletDecisionItem
+	Reinforce     []WalletDecisionItem
+	SellNowCount  int
 	HasSellSignal bool
 }
 
@@ -54,7 +54,7 @@ func BuildWalletDecision(wallet exchange.Wallet, opportunities []Opportunity) Wa
 			reduce = append(reduce, WalletDecisionItem{
 				Symbol: symbol,
 				Value:  asset.Value,
-				Reason: "profil leader " + opportunity.Leader.State + ", priorite " + opportunity.PriorityBand,
+				Reason: "profil leader " + opportunity.Leader.State + ", priorité " + opportunity.PriorityBand,
 			})
 			continue
 		}
@@ -63,7 +63,7 @@ func BuildWalletDecision(wallet exchange.Wallet, opportunities []Opportunity) Wa
 			reinforce = append(reinforce, WalletDecisionItem{
 				Symbol: symbol,
 				Value:  asset.Value,
-				Reason: "entree fraiche et priorite actionnable",
+				Reason: "entrée fraîche et priorité actionnable",
 			})
 			continue
 		}
@@ -71,7 +71,7 @@ func BuildWalletDecision(wallet exchange.Wallet, opportunities []Opportunity) Wa
 		watch = append(watch, WalletDecisionItem{
 			Symbol: symbol,
 			Value:  asset.Value,
-			Reason: "etat " + opportunity.Leader.State + ", priorite " + opportunity.PriorityBand,
+			Reason: "état " + opportunity.Leader.State + ", priorité " + opportunity.PriorityBand,
 		})
 	}
 

@@ -26,10 +26,10 @@ const (
 )
 
 type TelegramAlertNotifier struct {
-	botToken      string
-	chatID        string
-	baseURL       string
-	client        *http.Client
+	botToken       string
+	chatID         string
+	baseURL        string
+	client         *http.Client
 	exchangeClient exchange.ExchangeClient
 	candleStore    store.CandleStore
 	nextUpdateID   int64
