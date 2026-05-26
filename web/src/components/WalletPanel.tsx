@@ -16,6 +16,11 @@ type AssetMetrics = {
   pnlPercent: number
 }
 
+function getChangeClassName(change: number | undefined): string {
+  if (change === undefined) return 'col-hidden-mobile'
+  return `col-hidden-mobile ${change < 0 ? 'negative' : 'positive'}`
+}
+
 export function WalletPanel() {
   const [wallet, setWallet] = useState(emptyWallet)
   const [opportunities, setOpportunities] = useState<Opportunity[]>([])
@@ -173,14 +178,15 @@ export function WalletPanel() {
 
   const decisionMap = useMemo(() => {
     const map = new Map<string, 'reduce' | 'watch' | 'reinforce'>()
-    for (const item of walletDecisions.reduce) {
-      map.set(item.symbol, 'reduce')
-    }
-    for (const item of walletDecisions.watch) {
-      map.set(item.symbol, 'watch')
-    }
-    for (const item of walletDecisions.reinforce) {
-      map.set(item.symbol, 'reinforce')
+    const entries: Array<['reduce' | 'watch' | 'reinforce', typeof walletDecisions.reduce]> = [
+      ['reduce', walletDecisions.reduce],
+      ['watch', walletDecisions.watch],
+      ['reinforce', walletDecisions.reinforce],
+    ]
+    for (const [decision, items] of entries) {
+      for (const item of items) {
+        map.set(item.symbol, decision)
+      }
     }
     return map
   }, [walletDecisions])
@@ -370,10 +376,10 @@ export function WalletPanel() {
                     <td className="col-hidden-mobile">
                       {opportunity ? formatNumber(opportunity.qualityScore, 1) : <span className="muted-text">-</span>}
                     </td>
-                    <td className={`col-hidden-mobile${opportunity && opportunity.change24h < 0 ? ' negative' : opportunity ? ' positive' : ''}`}>
+                    <td className={getChangeClassName(opportunity?.change24h)}>
                       {opportunity ? formatSignedPercent(opportunity.change24h) : <span className="muted-text">-</span>}
                     </td>
-                    <td className={`col-hidden-mobile${opportunity && opportunity.change1h < 0 ? ' negative' : opportunity ? ' positive' : ''}`}>
+                    <td className={getChangeClassName(opportunity?.change1h)}>
                       {opportunity ? formatSignedPercent(opportunity.change1h) : <span className="muted-text">-</span>}
                     </td>
                     <td className="col-hidden-mobile">
