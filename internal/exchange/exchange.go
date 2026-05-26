@@ -44,18 +44,25 @@ const (
 )
 
 type Wallet struct {
-	TotalValue float64       // total value of the wallet in EUR
-	CashValue  float64       // total value of the cash in EUR
-	AssetValue float64       // total value of the assets in EUR
-	Assets     []WalletAsset // list of assets in the wallet
+	TotalValue       float64       // total value of the wallet in EUR
+	CashValue        float64       // total value of the cash in EUR
+	AssetValue       float64       // total value of the assets in EUR
+	NetDepositsValue float64       // net deposited EUR inferred from transaction history
+	PnLValue         float64       // profit/loss in EUR, computed as total - net deposits
+	PnLPercent       float64       // profit/loss in %, computed against net deposits when > 0
+	Assets           []WalletAsset // list of assets in the wallet
 }
 
 type WalletAsset struct {
-	Symbol        string  // symbol of the asset, e.g., "BTC"
-	Amount        float64 // amount of the asset
-	InOrder       float64 // amount of the asset that is currently in open orders (not available for trading)
-	StakingAmount float64 // amount of the asset that is staked (if applicable)
-	Value         float64 // value of the asset in EUR
+	Symbol         string  // symbol of the asset, e.g., "BTC"
+	Amount         float64 // amount of the asset
+	InOrder        float64 // amount of the asset that is currently in open orders (not available for trading)
+	StakingAmount  float64 // amount of the asset that is staked (if applicable)
+	Trend24h       float64 // market trend over the last 24h in percent
+	CostBasisValue float64 // estimated cost basis in EUR for current position
+	PnLValue       float64 // unrealized profit/loss in EUR for current position
+	PnLPercent     float64 // unrealized profit/loss in % against cost basis
+	Value          float64 // value of the asset in EUR
 }
 
 type ExchangeClient interface {

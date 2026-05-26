@@ -5,6 +5,12 @@ type Market = {
   symbol: string
   quoteVolume: number
   quoteVolumePosition: number
+  qualityScore: number
+  qualityRsi: number
+  qualityMacd: number
+  qualityBollinger: number
+  qualityVolume: number
+  qualitySma: number
   change24h: number
   change24hPosition: number
   change1h: number
@@ -89,6 +95,9 @@ type WalletAsset = {
   amount: number
   inOrder: number
   stakingAmount: number
+  costBasisValue: number
+  pnlValue: number
+  pnlPercent: number
   value: number
 }
 
@@ -96,10 +105,15 @@ type Wallet = {
   totalValue: number
   cashValue: number
   assetValue: number
+  netDepositsValue: number
+  pnlValue: number
+  pnlPercent: number
   assets: WalletAsset[]
 }
 
 type AppTab = 'overview' | 'markets' | 'backtest' | 'tasks' | 'heatmap' | 'wallet'
+
+type MarketSortKey = 'score' | 'change24h' | 'change1h' | 'change5m' | 'quoteVolume'
 
 const chartWindows: ChartWindow[] = [
   { candles: 48, label: '4h' },
@@ -135,6 +149,12 @@ function normalizeMarket(raw: unknown): Market {
     symbol: toStringValue(r.symbol ?? r.Symbol),
     quoteVolume: toNumber(r.quoteVolume ?? r.QuoteVolume),
     quoteVolumePosition: toNumber(r.quoteVolumePosition ?? r.QuoteVolumePosition),
+    qualityScore: toNumber(r.qualityScore ?? r.QualityScore),
+    qualityRsi: toNumber(r.qualityRsi ?? r.QualityRSI),
+    qualityMacd: toNumber(r.qualityMacd ?? r.QualityMACD),
+    qualityBollinger: toNumber(r.qualityBollinger ?? r.QualityBollinger),
+    qualityVolume: toNumber(r.qualityVolume ?? r.QualityVolume),
+    qualitySma: toNumber(r.qualitySma ?? r.QualitySMA),
     change24h: toNumber(r.change24h ?? r.Change24h),
     change24hPosition: toNumber(r.change24hPosition ?? r.Change24hPosition),
     change1h: toNumber(r.change1h ?? r.Change1h),
@@ -222,6 +242,9 @@ function normalizeWalletAsset(raw: unknown): WalletAsset {
     amount: toNumber(r.amount ?? r.Amount),
     inOrder: toNumber(r.inOrder ?? r.InOrder),
     stakingAmount: toNumber(r.stakingAmount ?? r.StakingAmount),
+    costBasisValue: toNumber(r.costBasisValue ?? r.CostBasisValue),
+    pnlValue: toNumber(r.pnlValue ?? r.PnLValue),
+    pnlPercent: toNumber(r.pnlPercent ?? r.PnLPercent),
     value: toNumber(r.value ?? r.Value),
   }
 }
@@ -235,6 +258,9 @@ function normalizeWallet(raw: unknown): Wallet {
     totalValue: toNumber(r.totalValue ?? r.TotalValue),
     cashValue: toNumber(r.cashValue ?? r.CashValue),
     assetValue: toNumber(r.assetValue ?? r.AssetValue),
+    netDepositsValue: toNumber(r.netDepositsValue ?? r.NetDepositsValue),
+    pnlValue: toNumber(r.pnlValue ?? r.PnLValue),
+    pnlPercent: toNumber(r.pnlPercent ?? r.PnLPercent),
     assets,
   }
 }
@@ -466,9 +492,14 @@ function App() {
     totalValue: 0,
     cashValue: 0,
     assetValue: 0,
+    netDepositsValue: 0,
+    pnlValue: 0,
+    pnlPercent: 0,
     assets: [],
   })
   const [walletLoading, setWalletLoading] = useState(false)
+  const [includeStakingInPnl, setIncludeStakingInPnl] = useState(true)
+  const [marketSortKey, setMarketSortKey] = useState<MarketSortKey>('score')
 
   const topSymbols = useMemo(
     () => markets.slice(0, 20).map((m) => m.symbol),
@@ -533,7 +564,7 @@ function App() {
     let cancelled = false
 
     const loadMiniCharts = async () => {
-      const targets = topSymbols.slice(0, 8)
+      const targets = topSymbols.slice(0, 20)
       const entries = await Promise.all(
         targets.map(async (symbol) => {
           try {
@@ -863,6 +894,115 @@ function App() {
     }
     return rows
   }, [dailyActivity])
+  const market24hBySymbol = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const m of markets) {
+      map.set(m.symbol.toUpperCase(), m.change24h)
+    }
+    return map
+  }, [markets])
+  const liveMiniChartsBySymbol = useMemo(() => {
+    const map = new Map<string, number[]>()
+    for (const candle of liveCandles) {
+      const values = [candle.open, candle.high, candle.low, candle.close].filter((value) =>
+        Number.isFinite(value),
+      )
+      if (values.length > 0) {
+        map.set(candle.symbol.toUpperCase(), values)
+      }
+    }
+    return map
+  }, [liveCandles])
+  const walletPnlMetrics = useMemo(() => {
+    const metricsBySymbol = new Map<string, { effectiveValue: number; effectiveCostBasis: number; pnlValue: number; pnlPercent: number }>()
+
+    let effectiveTotalValue = 0
+    for (const asset of wallet.assets) {
+      const totalQty = asset.amount + asset.inOrder + asset.stakingAmount
+      const effectiveQty = includeStakingInPnl ? totalQty : asset.amount + asset.inOrder
+
+      let effectiveValue = asset.value
+      let effectiveCostBasis = asset.costBasisValue
+
+      if (totalQty > 0) {
+        const ratio = Math.max(0, Math.min(1, effectiveQty / totalQty))
+        effectiveValue = asset.value * ratio
+        effectiveCostBasis = asset.costBasisValue * ratio
+      }
+
+      const pnlValue = effectiveValue - effectiveCostBasis
+      const pnlPercent = effectiveCostBasis > 0 ? (pnlValue / effectiveCostBasis) * 100 : 0
+      metricsBySymbol.set(asset.symbol.toUpperCase(), {
+        effectiveValue,
+        effectiveCostBasis,
+        pnlValue,
+        pnlPercent,
+      })
+
+      effectiveTotalValue += effectiveValue
+    }
+
+    const globalPnlValue = effectiveTotalValue - wallet.netDepositsValue
+    const globalPnlPercent =
+      wallet.netDepositsValue > 0 ? (globalPnlValue / wallet.netDepositsValue) * 100 : 0
+
+    return {
+      bySymbol: metricsBySymbol,
+      effectiveTotalValue,
+      globalPnlValue,
+      globalPnlPercent,
+    }
+  }, [wallet.assets, wallet.netDepositsValue, includeStakingInPnl])
+  const walletPnl24h = useMemo(() => {
+    const pnlValue = wallet.assets.reduce((sum, asset) => {
+      const metrics = walletPnlMetrics.bySymbol.get(asset.symbol.toUpperCase())
+      if (!metrics) {
+        return sum
+      }
+      const symbol = asset.symbol.toUpperCase()
+      const trend24h = market24hBySymbol.get(symbol)
+      if (trend24h === undefined || !Number.isFinite(trend24h)) {
+        return sum
+      }
+
+      const ratio = trend24h / 100
+      const denom = 1 + ratio
+      if (denom <= 0) {
+        return sum
+      }
+
+      const previousValue = metrics.effectiveValue / denom
+      return sum + (metrics.effectiveValue - previousValue)
+    }, 0)
+
+    const previousTotal = walletPnlMetrics.effectiveTotalValue - pnlValue
+    const pnlPercent = previousTotal > 0 ? (pnlValue / previousTotal) * 100 : 0
+
+    return { value: pnlValue, percent: pnlPercent }
+  }, [wallet.assets, market24hBySymbol, walletPnlMetrics])
+  const visibleWalletAssets = useMemo(
+    () => wallet.assets.filter((asset) => asset.value >= 0.01),
+    [wallet.assets],
+  )
+  const sortedMarkets = useMemo(() => {
+    const cloned = [...markets]
+    cloned.sort((left, right) => {
+      switch (marketSortKey) {
+        case 'change24h':
+          return right.change24h - left.change24h
+        case 'change1h':
+          return right.change1h - left.change1h
+        case 'change5m':
+          return right.change5m - left.change5m
+        case 'quoteVolume':
+          return right.quoteVolume - left.quoteVolume
+        case 'score':
+        default:
+          return right.qualityScore - left.qualityScore
+      }
+    })
+    return cloned
+  }, [markets, marketSortKey])
 
   return (
     <main className="app-shell">
@@ -994,12 +1134,43 @@ function App() {
       {activeTab === 'markets' && (
       <section className="panel-grid">
         <article className="panel">
-          <h3>Top markets</h3>
+          <div className="markets-head">
+            <h3>Top markets</h3>
+            <label className="markets-sort">
+              <span>Trier par</span>
+              <select
+                value={marketSortKey}
+                onChange={(event) => setMarketSortKey(event.target.value as MarketSortKey)}
+              >
+                <option value="score">Score</option>
+                <option value="change24h">24h %</option>
+                <option value="change1h">1h %</option>
+                <option value="change5m">5m %</option>
+                <option value="quoteVolume">Volume</option>
+              </select>
+            </label>
+          </div>
+          <div className="markets-legend" aria-label="Légende des scores">
+            <div className="markets-legend-levels">
+              <span className="market-score-pill excellent">75-100 Excellent</span>
+              <span className="market-score-pill good">60-74 Bon</span>
+              <span className="market-score-pill neutral">40-59 Neutre</span>
+              <span className="market-score-pill weak">0-39 Faible</span>
+            </div>
+            <div className="markets-legend-details">
+              <span><strong>RSI</strong>: momentum relatif</span>
+              <span><strong>MACD</strong>: tendance + accélération</span>
+              <span><strong>BB</strong>: position dans les Bollinger bands</span>
+              <span><strong>Vol</strong>: volume vs moyenne</span>
+              <span><strong>SMA</strong>: tendance de fond moyennes mobiles</span>
+            </div>
+          </div>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>Symbol</th>
+                  <th>Score</th>
                   <th>24h %</th>
                   <th>1h %</th>
                   <th>5m %</th>
@@ -1007,15 +1178,45 @@ function App() {
                 </tr>
               </thead>
               <tbody>
-                {markets.slice(0, 20).map((market) => (
+                {sortedMarkets.slice(0, 20).map((market) => {
+                  const sparklineValues =
+                    marketMiniCharts[market.symbol] && marketMiniCharts[market.symbol].length > 0
+                      ? marketMiniCharts[market.symbol]
+                      : liveMiniChartsBySymbol.get(market.symbol.toUpperCase()) ?? []
+
+                  return (
                   <tr key={market.symbol}>
                     <td>{market.symbol}</td>
+                    <td>
+                      <div className="market-score-stack">
+                        <span
+                          className={
+                            market.qualityScore >= 75
+                              ? 'market-score-pill excellent'
+                              : market.qualityScore >= 60
+                                ? 'market-score-pill good'
+                                : market.qualityScore >= 40
+                                  ? 'market-score-pill neutral'
+                                  : 'market-score-pill weak'
+                          }
+                        >
+                          {formatNumber(market.qualityScore, 1)}
+                        </span>
+                        <div className="market-score-details">
+                          <span>RSI {formatNumber(market.qualityRsi, 0)}</span>
+                          <span>MACD {formatNumber(market.qualityMacd, 0)}</span>
+                          <span>BB {formatNumber(market.qualityBollinger, 0)}</span>
+                          <span>Vol {formatNumber(market.qualityVolume, 0)}</span>
+                          <span>SMA {formatNumber(market.qualitySma, 0)}</span>
+                        </div>
+                      </div>
+                    </td>
                     <td>{formatNumber(market.change24h, 2)}</td>
                     <td>{formatNumber(market.change1h, 2)}</td>
                     <td>{formatNumber(market.change5m, 2)}</td>
                     <td className="market-trend-cell">
                       <Sparkline
-                        values={marketMiniCharts[market.symbol] ?? []}
+                        values={sparklineValues}
                         stroke="#0f766e"
                         fill="rgba(15, 118, 110, 0.12)"
                         height={36}
@@ -1023,7 +1224,7 @@ function App() {
                       />
                     </td>
                   </tr>
-                ))}
+                )})}
               </tbody>
             </table>
           </div>
@@ -1238,11 +1439,24 @@ function App() {
       {activeTab === 'wallet' && (
       <section className="panel wallet-panel">
         <div className="wallet-head">
-          <h3>Wallet</h3>
-          <p>Portfolio et soldes des positions.</p>
-          <span>{walletLoading ? 'Actualisation...' : 'À jour'}</span>
+          <div>
+            <h3>Wallet</h3>
+            <p>Portfolio et soldes des positions.</p>
+          </div>
+          <div className="wallet-head-actions">
+            <button
+              type="button"
+              className="wallet-toggle-button"
+              onClick={() => setIncludeStakingInPnl((prev) => !prev)}
+            >
+              {includeStakingInPnl
+                ? 'PnL: staking inclus'
+                : 'PnL: staking ignoré'}
+            </button>
+            <span>{walletLoading ? 'Actualisation...' : 'À jour'}</span>
+          </div>
         </div>
-        {wallet.assets.length === 0 ? (
+        {visibleWalletAssets.length === 0 ? (
           <div className="wallet-empty">
             <p>Pas de données de wallet pour le moment.</p>
           </div>
@@ -1261,6 +1475,26 @@ function App() {
                 <span>Valeur des actifs</span>
                 <h2>{formatNumber(wallet.assetValue, 2)} EUR</h2>
               </div>
+              <div className="wallet-card">
+                <span>Dépôts nets</span>
+                <h2>{formatNumber(wallet.netDepositsValue, 2)} EUR</h2>
+              </div>
+              <div className="wallet-card">
+                <span>PnL</span>
+                <h2 className={walletPnlMetrics.globalPnlValue >= 0 ? 'wallet-positive' : 'wallet-negative'}>
+                  {walletPnlMetrics.globalPnlValue >= 0 ? '+' : ''}
+                  {formatNumber(walletPnlMetrics.globalPnlValue, 2)} EUR ({walletPnlMetrics.globalPnlPercent >= 0 ? '+' : ''}
+                  {formatNumber(walletPnlMetrics.globalPnlPercent, 2)}%)
+                </h2>
+              </div>
+              <div className="wallet-card">
+                <span>PnL 24h</span>
+                <h2 className={walletPnl24h.value >= 0 ? 'wallet-positive' : 'wallet-negative'}>
+                  {walletPnl24h.value >= 0 ? '+' : ''}
+                  {formatNumber(walletPnl24h.value, 2)} EUR ({walletPnl24h.percent >= 0 ? '+' : ''}
+                  {formatNumber(walletPnl24h.percent, 2)}%)
+                </h2>
+              </div>
             </div>
             <div className="wallet-assets">
               <h4>Actifs</h4>
@@ -1271,19 +1505,37 @@ function App() {
                     <th>Montant</th>
                     <th>En ordre</th>
                     <th>Staking</th>
+                    <th>Tendance 24h</th>
+                    <th>Coût (EUR)</th>
+                    <th>PnL</th>
                     <th>Valeur (EUR)</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {wallet.assets.map((asset) => (
-                    <tr key={asset.symbol}>
-                      <td>{asset.symbol}</td>
-                      <td>{formatNumber(asset.amount, 8)}</td>
-                      <td>{formatNumber(asset.inOrder, 8)}</td>
-                      <td>{formatNumber(asset.stakingAmount, 8)}</td>
-                      <td>{formatNumber(asset.value, 2)}</td>
-                    </tr>
-                  ))}
+                  {visibleWalletAssets.map((asset) => {
+                    const trend24h = market24hBySymbol.get(asset.symbol.toUpperCase())
+                    const pnlMetrics = walletPnlMetrics.bySymbol.get(asset.symbol.toUpperCase())
+                    const assetPnlValue = pnlMetrics?.pnlValue ?? asset.pnlValue
+                    const assetPnlPercent = pnlMetrics?.pnlPercent ?? asset.pnlPercent
+                    return (
+                      <tr key={asset.symbol}>
+                        <td>{asset.symbol}</td>
+                        <td>{formatNumber(asset.amount, 8)}</td>
+                        <td>{formatNumber(asset.inOrder, 8)}</td>
+                        <td>{formatNumber(asset.stakingAmount, 8)}</td>
+                        <td className={trend24h === undefined ? '' : trend24h >= 0 ? 'wallet-positive' : 'wallet-negative'}>
+                          {trend24h === undefined ? '-' : `${trend24h >= 0 ? '+' : ''}${formatNumber(trend24h, 2)}%`}
+                        </td>
+                        <td>{formatNumber(asset.costBasisValue, 2)}</td>
+                        <td className={assetPnlValue >= 0 ? 'wallet-positive' : 'wallet-negative'}>
+                          {assetPnlValue >= 0 ? '+' : ''}
+                          {formatNumber(assetPnlValue, 2)} EUR ({assetPnlPercent >= 0 ? '+' : ''}
+                          {formatNumber(assetPnlPercent, 2)}%)
+                        </td>
+                        <td>{formatNumber(asset.value, 2)}</td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

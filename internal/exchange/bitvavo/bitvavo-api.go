@@ -329,6 +329,28 @@ type History struct {
 	Status    string `json:"status"`
 }
 
+type AccountTransactionHistoryResponse struct {
+	Items       []AccountTransaction `json:"items"`
+	CurrentPage int                  `json:"currentPage"`
+	TotalPages  int                  `json:"totalPages"`
+	MaxItems    int                  `json:"maxItems"`
+}
+
+type AccountTransaction struct {
+	TransactionID    string `json:"transactionId"`
+	ExecutedAt       string `json:"executedAt"`
+	Type             string `json:"type"`
+	PriceCurrency    string `json:"priceCurrency"`
+	PriceAmount      string `json:"priceAmount"`
+	SentCurrency     string `json:"sentCurrency"`
+	SentAmount       string `json:"sentAmount"`
+	ReceivedCurrency string `json:"receivedCurrency"`
+	ReceivedAmount   string `json:"receivedAmount"`
+	FeesCurrency     string `json:"feesCurrency"`
+	FeesAmount       string `json:"feesAmount"`
+	Address          string `json:"address"`
+}
+
 type SubscriptionTickerResponse struct {
 	Action   string             `json:"action"`
 	Response SubscriptionTicker `json:"response"`
@@ -1067,6 +1089,36 @@ func (bitvavo Bitvavo) WithdrawalHistory(options map[string]string) ([]History, 
 		return []History{History{}}, handleAPIError(jsonResponse)
 	}
 	return t, nil
+}
+
+// options: fromDate, toDate, page, maxItems, type
+func (bitvavo Bitvavo) TransactionHistory(options map[string]string) (AccountTransactionHistoryResponse, error) {
+	postfix := bitvavo.createPostfix(options)
+	jsonResponse := bitvavo.sendPrivate("/account/history", postfix, map[string]any{}, "GET")
+
+	resp := AccountTransactionHistoryResponse{}
+	if err := json.Unmarshal(jsonResponse, &resp); err == nil && (len(resp.Items) > 0 || resp.CurrentPage > 0 || resp.TotalPages > 0) {
+		if resp.CurrentPage == 0 {
+			resp.CurrentPage = 1
+		}
+		if resp.TotalPages == 0 {
+			resp.TotalPages = 1
+		}
+		return resp, nil
+	}
+
+	// Backward/compat fallback if the API responds with an array directly.
+	items := make([]AccountTransaction, 0)
+	if err := json.Unmarshal(jsonResponse, &items); err == nil {
+		return AccountTransactionHistoryResponse{
+			Items:       items,
+			CurrentPage: 1,
+			TotalPages:  1,
+			MaxItems:    len(items),
+		}, nil
+	}
+
+	return AccountTransactionHistoryResponse{}, handleAPIError(jsonResponse)
 }
 
 func handleError(err error) bool {

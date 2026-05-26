@@ -5,9 +5,21 @@ import (
 	"karasu/internal/exchange/bitvavo"
 	"log/slog"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
+
+type walletHistoryAnalysis struct {
+	NetDepositsEUR     float64
+	AvgCostEURBySymbol map[string]float64
+}
+
+type symbolLedger struct {
+	Qty     float64
+	CostEUR float64
+}
 
 type BitvavoClient struct {
 	api *bitvavo.Bitvavo
@@ -107,6 +119,15 @@ func (c BitvavoClient) Wallet() (Wallet, error) {
 	if err != nil {
 		return Wallet{}, err
 	}
+	prices["EUR"] = 1
+
+	historyItems, err := c.fetchTransactionHistory(3, 100)
+	if err != nil {
+		slog.Warn("failed to fetch transaction history for wallet analytics", "err", err)
+		historyItems = []bitvavo.AccountTransaction{}
+	}
+	historyAnalysis := analyzeWalletHistory(historyItems)
+	netDepositsValue := historyAnalysis.NetDepositsEUR
 
 	// On calcule la valeur de chaque actif en EUR, ainsi que la valeur totale du wallet et la valeur du cash
 	mapAssets := make(map[string]WalletAsset, 0)
@@ -166,17 +187,250 @@ func (c BitvavoClient) Wallet() (Wallet, error) {
 		totalValue += value
 	}
 
+	for symbol, asset := range mapAssets {
+		upperSymbol := strings.ToUpper(strings.TrimSpace(symbol))
+		if upperSymbol == "" {
+			continue
+		}
+
+		if upperSymbol == "EUR" {
+			asset.CostBasisValue = asset.Value
+			asset.PnLValue = 0
+			asset.PnLPercent = 0
+			mapAssets[symbol] = asset
+			continue
+		}
+
+		positionAmount := asset.Amount + asset.InOrder + asset.StakingAmount
+		avgCost := historyAnalysis.AvgCostEURBySymbol[upperSymbol]
+		costBasis := avgCost * positionAmount
+		asset.CostBasisValue = costBasis
+		asset.PnLValue = asset.Value - costBasis
+		asset.PnLPercent = 0
+		if costBasis > 0 {
+			asset.PnLPercent = (asset.PnLValue / costBasis) * 100
+		}
+		mapAssets[symbol] = asset
+	}
+
 	assets := make([]WalletAsset, 0, len(mapAssets))
 	for _, asset := range mapAssets {
 		assets = append(assets, asset)
 	}
+	sort.Slice(assets, func(i, j int) bool {
+		return assets[i].Value > assets[j].Value
+	})
+
+	pnlValue := totalValue - netDepositsValue
+	pnlPercent := 0.0
+	if netDepositsValue > 0 {
+		pnlPercent = (pnlValue / netDepositsValue) * 100
+	}
 
 	return Wallet{
-		TotalValue: totalValue,
-		CashValue:  cashValue,
-		AssetValue: totalValue - cashValue,
-		Assets:     assets,
+		TotalValue:       totalValue,
+		CashValue:        cashValue,
+		AssetValue:       totalValue - cashValue,
+		NetDepositsValue: netDepositsValue,
+		PnLValue:         pnlValue,
+		PnLPercent:       pnlPercent,
+		Assets:           assets,
 	}, nil
+}
+
+func (c BitvavoClient) fetchTransactionHistory(maxPages int, maxItems int) ([]bitvavo.AccountTransaction, error) {
+	if maxPages < 1 {
+		maxPages = 1
+	}
+	if maxItems < 1 {
+		maxItems = 100
+	}
+
+	items := make([]bitvavo.AccountTransaction, 0, maxPages*maxItems)
+	for page := 1; page <= maxPages; page++ {
+		resp, err := c.api.TransactionHistory(map[string]string{
+			"page":     strconv.Itoa(page),
+			"maxItems": strconv.Itoa(maxItems),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("bitvavo transaction history API call failed (page %d): %w", page, err)
+		}
+
+		items = append(items, resp.Items...)
+
+		if len(resp.Items) == 0 {
+			break
+		}
+		if resp.TotalPages > 0 && page >= resp.TotalPages {
+			break
+		}
+	}
+
+	return items, nil
+}
+
+func analyzeWalletHistory(items []bitvavo.AccountTransaction) walletHistoryAnalysis {
+	sorted := make([]bitvavo.AccountTransaction, len(items))
+	copy(sorted, items)
+
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ti, errI := time.Parse(time.RFC3339, sorted[i].ExecutedAt)
+		tj, errJ := time.Parse(time.RFC3339, sorted[j].ExecutedAt)
+		if errI != nil || errJ != nil {
+			return sorted[i].ExecutedAt < sorted[j].ExecutedAt
+		}
+		return ti.Before(tj)
+	})
+
+	ledgers := make(map[string]symbolLedger)
+	netDeposits := 0.0
+
+	for _, tx := range sorted {
+		netDeposits += netEURFromTransaction(tx)
+
+		txType := strings.ToLower(strings.TrimSpace(tx.Type))
+		sentCurrency := strings.ToUpper(strings.TrimSpace(tx.SentCurrency))
+		receivedCurrency := strings.ToUpper(strings.TrimSpace(tx.ReceivedCurrency))
+		feesCurrency := strings.ToUpper(strings.TrimSpace(tx.FeesCurrency))
+
+		sentAmount := parseFloatOrZero(tx.SentAmount)
+		receivedAmount := parseFloatOrZero(tx.ReceivedAmount)
+		feesAmount := parseFloatOrZero(tx.FeesAmount)
+
+		switch txType {
+		case "buy":
+			if receivedCurrency == "" || receivedCurrency == "EUR" || receivedAmount <= 0 {
+				continue
+			}
+			ledger := ledgers[receivedCurrency]
+			eurCost := 0.0
+			if sentCurrency == "EUR" {
+				eurCost += sentAmount
+			}
+			if feesCurrency == "EUR" {
+				eurCost += feesAmount
+			}
+			ledger.Qty += receivedAmount
+			ledger.CostEUR += eurCost
+			ledgers[receivedCurrency] = ledger
+
+		case "sell":
+			if sentCurrency == "" || sentCurrency == "EUR" || sentAmount <= 0 {
+				continue
+			}
+			ledger := ledgers[sentCurrency]
+			if ledger.Qty <= 0 {
+				continue
+			}
+			soldQty := sentAmount
+			if soldQty > ledger.Qty {
+				soldQty = ledger.Qty
+			}
+			costRemoved := 0.0
+			if ledger.Qty > 0 {
+				costRemoved = ledger.CostEUR * (soldQty / ledger.Qty)
+			}
+			ledger.Qty -= soldQty
+			ledger.CostEUR -= costRemoved
+			if ledger.Qty < 1e-12 {
+				ledger.Qty = 0
+				ledger.CostEUR = 0
+			}
+			if ledger.CostEUR < 0 {
+				ledger.CostEUR = 0
+			}
+			ledgers[sentCurrency] = ledger
+
+		default:
+			if receivedCurrency != "" && receivedCurrency != "EUR" && receivedAmount > 0 {
+				ledger := ledgers[receivedCurrency]
+				ledger.Qty += receivedAmount
+				ledgers[receivedCurrency] = ledger
+			}
+
+			if sentCurrency != "" && sentCurrency != "EUR" && sentAmount > 0 {
+				ledger := ledgers[sentCurrency]
+				if ledger.Qty > 0 {
+					movedQty := sentAmount
+					if movedQty > ledger.Qty {
+						movedQty = ledger.Qty
+					}
+					costRemoved := 0.0
+					if ledger.Qty > 0 {
+						costRemoved = ledger.CostEUR * (movedQty / ledger.Qty)
+					}
+					ledger.Qty -= movedQty
+					ledger.CostEUR -= costRemoved
+					if ledger.Qty < 1e-12 {
+						ledger.Qty = 0
+						ledger.CostEUR = 0
+					}
+					if ledger.CostEUR < 0 {
+						ledger.CostEUR = 0
+					}
+					ledgers[sentCurrency] = ledger
+				}
+			}
+		}
+	}
+
+	avgCostBySymbol := make(map[string]float64, len(ledgers))
+	for symbol, ledger := range ledgers {
+		if ledger.Qty <= 0 || ledger.CostEUR <= 0 {
+			continue
+		}
+		avgCostBySymbol[symbol] = ledger.CostEUR / ledger.Qty
+	}
+
+	return walletHistoryAnalysis{
+		NetDepositsEUR:     netDeposits,
+		AvgCostEURBySymbol: avgCostBySymbol,
+	}
+}
+
+func parseFloatOrZero(raw string) float64 {
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+func netEURFromTransaction(tx bitvavo.AccountTransaction) float64 {
+	txType := strings.ToLower(strings.TrimSpace(tx.Type))
+	if txType == "buy" || txType == "sell" || txType == "staking" || txType == "fixed_staking" {
+		return 0
+	}
+
+	sentCurrency := strings.ToUpper(strings.TrimSpace(tx.SentCurrency))
+	receivedCurrency := strings.ToUpper(strings.TrimSpace(tx.ReceivedCurrency))
+	feesCurrency := strings.ToUpper(strings.TrimSpace(tx.FeesCurrency))
+
+	sentAmount, err := strconv.ParseFloat(tx.SentAmount, 64)
+	if err != nil {
+		sentAmount = 0
+	}
+	receivedAmount, err := strconv.ParseFloat(tx.ReceivedAmount, 64)
+	if err != nil {
+		receivedAmount = 0
+	}
+	feesAmount, err := strconv.ParseFloat(tx.FeesAmount, 64)
+	if err != nil {
+		feesAmount = 0
+	}
+
+	net := 0.0
+	if receivedCurrency == "EUR" {
+		net += receivedAmount
+	}
+	if sentCurrency == "EUR" {
+		net -= sentAmount
+	}
+	if feesCurrency == "EUR" {
+		net -= feesAmount
+	}
+
+	return net
 }
 
 func (c BitvavoClient) Candles1mByDate(symbol string, date time.Time) (CandleBundle, error) {

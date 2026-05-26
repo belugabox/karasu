@@ -514,17 +514,81 @@ func (s *IngestionService) RefreshUniverse() error {
 		symbols = append(symbols, strings.ToUpper(bundle.Symbol))
 	}
 	symbols = uniqueSymbols(symbols)
+	tradableSet := make(map[string]struct{}, len(symbols))
+	for _, symbol := range symbols {
+		tradableSet[symbol] = struct{}{}
+	}
 
 	topSymbols, err := market.FindTopSymbols(s.exchangeClient)
 	if err != nil {
 		return fmt.Errorf("failed to compute top symbols: %w", err)
 	}
+	wallet, err := s.exchangeClient.Wallet()
+	if err != nil {
+		return fmt.Errorf("failed to load wallet for priority symbols: %w", err)
+	}
+	const minWalletValueEUR = 0.009
+	mandatoryWalletSymbols := make([]string, 0, len(wallet.Assets))
+	for _, asset := range wallet.Assets {
+		symbol := strings.ToUpper(strings.TrimSpace(asset.Symbol))
+		if symbol == "" || symbol == "EUR" {
+			continue
+		}
+		if _, tradable := tradableSet[symbol]; !tradable {
+			continue
+		}
+		if asset.Value > minWalletValueEUR {
+			mandatoryWalletSymbols = append(mandatoryWalletSymbols, symbol)
+		}
+	}
+	mandatoryWalletSymbols = uniqueSymbols(mandatoryWalletSymbols)
+
+	// Ensure mandatory wallet symbols are part of the tradable universe.
+	for _, symbol := range mandatoryWalletSymbols {
+		symbols = append(symbols, symbol)
+	}
+	symbols = uniqueSymbols(symbols)
+
 	for i := range topSymbols {
 		topSymbols[i] = strings.ToUpper(topSymbols[i])
 	}
+	topSymbols = append(mandatoryWalletSymbols, topSymbols...)
 	topSymbols = uniqueSymbols(topSymbols)
 	if len(topSymbols) > s.topSymbolsSize {
-		topSymbols = topSymbols[:s.topSymbolsSize]
+		// Preserve mandatory wallet symbols first, then fill the remaining budget.
+		mandatorySet := make(map[string]struct{}, len(mandatoryWalletSymbols))
+		for _, symbol := range mandatoryWalletSymbols {
+			mandatorySet[symbol] = struct{}{}
+		}
+		trimmed := make([]string, 0, s.topSymbolsSize)
+		for _, symbol := range topSymbols {
+			if len(trimmed) >= s.topSymbolsSize {
+				break
+			}
+			if _, isMandatory := mandatorySet[symbol]; !isMandatory {
+				continue
+			}
+			trimmed = append(trimmed, symbol)
+		}
+		if len(trimmed) < s.topSymbolsSize {
+			for _, symbol := range topSymbols {
+				if len(trimmed) >= s.topSymbolsSize {
+					break
+				}
+				already := false
+				for _, existing := range trimmed {
+					if existing == symbol {
+						already = true
+						break
+					}
+				}
+				if already {
+					continue
+				}
+				trimmed = append(trimmed, symbol)
+			}
+		}
+		topSymbols = trimmed
 	}
 
 	s.mu.Lock()

@@ -17,11 +17,25 @@ type Candle struct {
 	CloseTime time.Time
 }
 
+type QualityBreakdown struct {
+	Score     float64
+	RSI       float64
+	MACD      float64
+	Bollinger float64
+	Volume    float64
+	SMA       float64
+}
+
 // ComputeQualityScore returns a 0-100 momentum/quality score for a candle series.
 // timeframe can be "short", "medium", or anything else (treated as "long").
 func ComputeQualityScore(candles []Candle, timeframe string) float64 {
+	return ComputeQualityBreakdown(candles, timeframe).Score
+}
+
+// ComputeQualityBreakdown returns the total score and the weighted indicator components.
+func ComputeQualityBreakdown(candles []Candle, timeframe string) QualityBreakdown {
 	if len(candles) < 30 {
-		return 0
+		return QualityBreakdown{}
 	}
 
 	closes := candleCloses(candles)
@@ -34,14 +48,24 @@ func ComputeQualityScore(candles []Candle, timeframe string) float64 {
 	volumeVal := volumeScore(volumes)
 	smaVal := smaTrendScore(closes)
 
+	breakdown := QualityBreakdown{
+		RSI:       rsiVal,
+		MACD:      macdVal,
+		Bollinger: bollingerVal,
+		Volume:    volumeVal,
+		SMA:       smaVal,
+	}
+
 	switch timeframe {
 	case "short":
-		return clamp(rsiVal*0.30+macdVal*0.40+bollingerVal*0.10+volumeVal*0.20, 0, 100)
+		breakdown.Score = clamp(rsiVal*0.30+macdVal*0.40+bollingerVal*0.10+volumeVal*0.20, 0, 100)
 	case "medium":
-		return clamp(rsiVal*0.25+macdVal*0.35+bollingerVal*0.20+volumeVal*0.10+smaVal*0.10, 0, 100)
+		breakdown.Score = clamp(rsiVal*0.25+macdVal*0.35+bollingerVal*0.20+volumeVal*0.10+smaVal*0.10, 0, 100)
 	default:
-		return clamp(rsiVal*0.20+macdVal*0.30+bollingerVal*0.15+volumeVal*0.05+smaVal*0.30, 0, 100)
+		breakdown.Score = clamp(rsiVal*0.20+macdVal*0.30+bollingerVal*0.15+volumeVal*0.05+smaVal*0.30, 0, 100)
 	}
+
+	return breakdown
 }
 
 func candleCloses(candles []Candle) []float64 {
