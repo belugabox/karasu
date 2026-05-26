@@ -42,11 +42,24 @@ export async function getSystemHealth(staleThresholdMin = 20): Promise<SystemHea
   return normalizeSystemHealth(data)
 }
 
-export async function getRecentAlerts(limit = 50, activeOnly = false): Promise<AlertEvent[]> {
+export type AlertsPage = {
+  alerts: AlertEvent[]
+  total: number
+  offset: number
+  limit: number
+}
+
+export async function getRecentAlerts(limit = 50, activeOnly = false, offset = 0): Promise<AlertsPage> {
   const params = new URLSearchParams({
     limit: String(limit),
     activeOnly: activeOnly ? 'true' : 'false',
+    offset: String(offset),
   })
-  const data = await fetchJson<{ alerts?: unknown[] }>(`/api/alerts/recent?${params.toString()}`)
-  return Array.isArray(data?.alerts) ? data.alerts.map(normalizeAlertEvent) : []
+  const data = await fetchJson<{ alerts?: unknown[]; total?: number; offset?: number; limit?: number }>(`/api/alerts/recent?${params.toString()}`)
+  return {
+    alerts: Array.isArray(data?.alerts) ? data.alerts.map(normalizeAlertEvent) : [],
+    total: typeof data?.total === 'number' ? data.total : 0,
+    offset: typeof data?.offset === 'number' ? data.offset : offset,
+    limit: typeof data?.limit === 'number' ? data.limit : limit,
+  }
 }
