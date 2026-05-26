@@ -814,6 +814,19 @@ tbody td {
   margin-top: -4px;
 }
 
+/* ── Wallet rows ── */
+.wallet-row.wallet-reduce {
+  background: rgba(240, 120, 152, 0.07);
+}
+
+.wallet-row.wallet-reinforce {
+  background: rgba(92, 200, 160, 0.07);
+}
+
+.wallet-row.wallet-watch {
+  background: rgba(200, 168, 240, 0.07);
+}
+
 /* ── Responsive ── */
 @media (max-width: 1080px) {
   .kpi-grid,
@@ -885,6 +898,10 @@ tbody td {
   }
 
   .state-legend {
+    display: none;
+  }
+
+  .col-hidden-mobile {
     display: none;
   }
 }
