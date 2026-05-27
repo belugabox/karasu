@@ -576,6 +576,10 @@ func (f fakeExchangeClient) Candles(symbol string, start time.Time, end time.Tim
 	return exchange.CandleBundle{}, nil
 }
 
+func (f fakeExchangeClient) PlaceMarketOrder(_ string, _ string, _ float64) (exchange.OrderResult, error) {
+	return exchange.OrderResult{}, nil
+}
+
 func assertClose(t *testing.T, got, want float64) {
 	t.Helper()
 

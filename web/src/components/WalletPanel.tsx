@@ -6,8 +6,15 @@ import { getOpportunities } from '../services/marketService'
 import { getWallet } from '../services/walletService'
 import { formatNumber, formatSignedPercent } from '../utils/format'
 import { translatePriorityBand, translateStateLabel } from '../utils/market-translations'
+import { TradeModal } from './TradeModal'
 
 type WalletSortKey = 'value' | 'pnl' | 'score' | 'change24h' | 'change1h'
+
+type TradeTarget = {
+  symbol: string
+  side: 'buy' | 'sell'
+  suggestedAmountEur?: number
+}
 
 type AssetMetrics = {
   effectiveValue: number
@@ -30,6 +37,7 @@ export function WalletPanel() {
   const [opportunitiesError, setOpportunitiesError] = useState('')
   const [includeStakingInPnl, setIncludeStakingInPnl] = useState(true)
   const [walletSortKey, setWalletSortKey] = useState<WalletSortKey>('value')
+  const [tradeTarget, setTradeTarget] = useState<TradeTarget | null>(null)
 
   const loadWallet = useCallback(async () => {
     setLoading(true)
@@ -216,6 +224,14 @@ export function WalletPanel() {
 
   return (
     <section className="panel">
+      {tradeTarget && (
+        <TradeModal
+          symbol={tradeTarget.symbol}
+          side={tradeTarget.side}
+          suggestedAmountEur={tradeTarget.suggestedAmountEur}
+          onClose={() => setTradeTarget(null)}
+        />
+      )}
       <div className="panel-head">
         <div>
           <h2>Portefeuille</h2>
@@ -348,6 +364,7 @@ export function WalletPanel() {
                 <th className="col-hidden-mobile">24h</th>
                 <th className="col-hidden-mobile">1h</th>
                 <th className="col-hidden-mobile">Signal</th>
+                <th>Ordre</th>
               </tr>
             </thead>
             <tbody>
@@ -395,6 +412,26 @@ export function WalletPanel() {
                       ) : (
                         <span className="muted-text">-</span>
                       )}
+                    </td>
+                    <td>
+                      <div className="strategy-inline-list">
+                        {asset.symbol !== 'EUR' && (
+                          <button
+                            type="button"
+                            className="action-button trade-sell-button"
+                            onClick={() => setTradeTarget({ symbol: asset.symbol, side: 'sell', suggestedAmountEur: asset.value })}
+                          >
+                            Vendre
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="action-button trade-buy-button"
+                          onClick={() => setTradeTarget({ symbol: asset.symbol, side: 'buy' })}
+                        >
+                          Acheter
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 )

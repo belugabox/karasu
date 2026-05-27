@@ -269,6 +269,10 @@ func (f telegramTestExchangeClient) Candles(symbol string, start time.Time, end 
 	return exchange.CandleBundle{}, nil
 }
 
+func (f telegramTestExchangeClient) PlaceMarketOrder(_ string, _ string, _ float64) (exchange.OrderResult, error) {
+	return exchange.OrderResult{}, nil
+}
+
 type telegramErrorTransport struct{}
 
 func (telegramErrorTransport) RoundTrip(req *http.Request) (*http.Response, error) {

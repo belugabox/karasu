@@ -827,6 +827,153 @@ tbody td {
   background: rgba(200, 168, 240, 0.07);
 }
 
+/* ── Trade modal ── */
+.trade-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(30, 20, 50, 0.45);
+  backdrop-filter: blur(3px);
+}
+
+.trade-modal {
+  background: #ffffff;
+  border: 2px solid var(--stroke);
+  border-radius: 24px;
+  padding: 24px;
+  min-width: 320px;
+  max-width: 420px;
+  width: 100%;
+  box-shadow: 0 12px 40px rgba(155, 127, 212, 0.2);
+}
+
+.trade-modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.trade-modal-head h3 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 800;
+}
+
+.trade-modal-close {
+  background: none;
+  border: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+  color: var(--ink-soft);
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: background 150ms;
+}
+
+.trade-modal-close:hover {
+  background: rgba(200, 168, 240, 0.15);
+}
+
+.trade-modal-desc {
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+  font-weight: 600;
+  margin: 0 0 14px;
+}
+
+.trade-modal-label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+  margin-bottom: 6px;
+}
+
+.trade-modal-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 2px solid var(--stroke);
+  border-radius: 14px;
+  padding: 9px 12px;
+  font-size: 1rem;
+  font-family: var(--font);
+  font-weight: 700;
+  background: #fdf8ff;
+  outline: none;
+  transition: border-color 150ms;
+}
+
+.trade-modal-input:focus {
+  border-color: var(--primary);
+}
+
+.trade-modal-hint {
+  margin: 6px 0 0;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.trade-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.trade-modal-submit {
+  border-color: var(--stroke);
+}
+
+.trade-modal-submit.trade-buy {
+  border-color: rgba(92, 200, 160, 0.5);
+  background: rgba(92, 200, 160, 0.12);
+  color: #2a9a72;
+}
+
+.trade-modal-submit.trade-buy:hover:not(:disabled) {
+  border-color: rgba(92, 200, 160, 0.8);
+  background: rgba(92, 200, 160, 0.2);
+  box-shadow: 0 3px 10px rgba(92, 200, 160, 0.25);
+}
+
+.trade-modal-submit.trade-sell {
+  border-color: rgba(240, 120, 152, 0.5);
+  background: rgba(240, 120, 152, 0.1);
+  color: #c04070;
+}
+
+.trade-modal-submit.trade-sell:hover:not(:disabled) {
+  border-color: rgba(240, 120, 152, 0.8);
+  background: rgba(240, 120, 152, 0.18);
+  box-shadow: 0 3px 10px rgba(240, 120, 152, 0.2);
+}
+
+/* ── Trade inline buttons ── */
+.trade-buy-button {
+  border-color: rgba(92, 200, 160, 0.45);
+  color: #2a9a72;
+}
+
+.trade-buy-button:hover:not(:disabled) {
+  border-color: rgba(92, 200, 160, 0.8);
+  background: rgba(92, 200, 160, 0.12);
+}
+
+.trade-sell-button {
+  border-color: rgba(240, 120, 152, 0.45);
+  color: #c04070;
+}
+
+.trade-sell-button:hover:not(:disabled) {
+  border-color: rgba(240, 120, 152, 0.8);
+  background: rgba(240, 120, 152, 0.1);
+}
+
 /* ── Responsive ── */
 @media (max-width: 1080px) {
   .kpi-grid,
