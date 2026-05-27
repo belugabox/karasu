@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -181,6 +182,32 @@ func TestTelegramAlertNotifierPollOnceRepliesToSupportedCommands(t *testing.T) {
 	}
 }
 
+func TestTelegramAlertNotifierRedactsTokenFromHTTPClientErrors(t *testing.T) {
+	t.Parallel()
+
+	notifier, err := NewTelegramAlertNotifier("token-123", "456")
+	if err != nil {
+		t.Fatalf("failed to create notifier: %v", err)
+	}
+	notifier.client = &http.Client{Transport: telegramErrorTransport{}}
+
+	sendErr := notifier.sendText(context.Background(), "456", "hello")
+	if sendErr == nil {
+		t.Fatal("expected sendText to return an error")
+	}
+	if strings.Contains(sendErr.Error(), "token-123") {
+		t.Fatalf("expected sendText error to redact bot token, got %q", sendErr)
+	}
+
+	_, pollErr := notifier.getUpdates(context.Background())
+	if pollErr == nil {
+		t.Fatal("expected getUpdates to return an error")
+	}
+	if strings.Contains(pollErr.Error(), "token-123") {
+		t.Fatalf("expected getUpdates error to redact bot token, got %q", pollErr)
+	}
+}
+
 type telegramTestExchangeClient struct {
 	wallet         exchange.Wallet
 	candlesLast24h []exchange.CandleBundle
@@ -213,6 +240,16 @@ func (f telegramTestExchangeClient) CandlesLast24h() ([]exchange.CandleBundle, e
 
 func (f telegramTestExchangeClient) Candles(symbol string, start time.Time, end time.Time, interval exchange.Interval) (exchange.CandleBundle, error) {
 	return exchange.CandleBundle{}, nil
+}
+
+type telegramErrorTransport struct{}
+
+func (telegramErrorTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return nil, &url.Error{
+		Op:  req.Method,
+		URL: req.URL.String(),
+		Err: context.DeadlineExceeded,
+	}
 }
 
 type telegramTestCandleStore struct {

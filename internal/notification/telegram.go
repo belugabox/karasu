@@ -271,7 +271,7 @@ func (n *TelegramAlertNotifier) sendText(ctx context.Context, chatID, text strin
 
 	resp, err := n.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send telegram alert: %w", err)
+		return fmt.Errorf("failed to send telegram alert: %s", n.redactSensitiveError(err))
 	}
 	defer resp.Body.Close()
 
@@ -300,7 +300,7 @@ func (n *TelegramAlertNotifier) getUpdates(ctx context.Context) ([]telegramUpdat
 
 	resp, err := n.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to poll telegram updates: %w", err)
+		return nil, fmt.Errorf("failed to poll telegram updates: %s", n.redactSensitiveError(err))
 	}
 	defer resp.Body.Close()
 
@@ -325,6 +325,19 @@ func (n *TelegramAlertNotifier) sendMessageEndpoint() string {
 
 func (n *TelegramAlertNotifier) getUpdatesEndpoint() string {
 	return fmt.Sprintf("%s/bot%s/getUpdates", strings.TrimRight(n.baseURL, "/"), n.botToken)
+}
+
+func (n *TelegramAlertNotifier) redactSensitiveError(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	message := err.Error()
+	if token := strings.TrimSpace(n.botToken); token != "" {
+		message = strings.ReplaceAll(message, token, "[REDACTED]")
+	}
+
+	return message
 }
 
 func formatTelegramAlert(alert store.AlertEvent) string {

@@ -200,7 +200,14 @@ func (s *IngestionService) upsertAlert(key, category string, severity store.Aler
 
 	now := time.Now().UTC()
 	s.alertsMu.Lock()
-	defer s.alertsMu.Unlock()
+	var notifyEvent store.AlertEvent
+	var shouldNotify bool
+	defer func() {
+		s.alertsMu.Unlock()
+		if shouldNotify {
+			s.notifyAlert(notifyEvent)
+		}
+	}()
 
 	existing, found := s.alerts[key]
 	if !found {
@@ -219,7 +226,8 @@ func (s *IngestionService) upsertAlert(key, category string, severity store.Aler
 		}
 		s.alerts[key] = event
 		s.persistAlert(event)
-		s.notifyAlert(event)
+		notifyEvent = event
+		shouldNotify = true
 		return
 	}
 
@@ -230,7 +238,7 @@ func (s *IngestionService) upsertAlert(key, category string, severity store.Aler
 		existing.Symbol != symbol ||
 		existing.Active != active
 	bumpCount := now.Sub(existing.LastSeen) >= defaultAlertDedupWindow || changed
-	shouldNotify := changed
+	shouldNotify = changed
 
 	existing.Category = category
 	existing.Severity = severity
@@ -246,7 +254,7 @@ func (s *IngestionService) upsertAlert(key, category string, severity store.Aler
 	s.alerts[key] = existing
 	s.persistAlert(existing)
 	if shouldNotify {
-		s.notifyAlert(existing)
+		notifyEvent = existing
 	}
 }
 
