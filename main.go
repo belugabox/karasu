@@ -13,6 +13,7 @@ import (
 	karasuapi "karasu/internal/api"
 	"karasu/internal/exchange"
 	"karasu/internal/ingestion"
+	"karasu/internal/notification"
 	"karasu/internal/scheduler"
 	"karasu/internal/store"
 
@@ -52,6 +53,15 @@ func main() {
 
 	ingestionService := ingestion.NewIngestionService(exchangeClient, candleStore)
 	ingestionService.SetAlertStore(candleStore)
+	if telegramNotifier, err := telegramNotifierFromEnv(); err != nil {
+		slog.Error("failed to configure telegram notifier", "err", err)
+		return
+	} else if telegramNotifier != nil {
+		telegramNotifier.SetCommandSources(exchangeClient, candleStore)
+		ingestionService.SetAlertNotifier(telegramNotifier)
+		go telegramNotifier.Run(ctx)
+		slog.Info("telegram alert notifier enabled")
+	}
 	if err := ingestionService.RefreshUniverse(); err != nil {
 		slog.Warn("initial universe refresh failed", "err", err)
 	}
@@ -153,4 +163,15 @@ func durationFromEnv(envName string, defaultValue time.Duration) (time.Duration,
 	}
 
 	return parsed, nil
+}
+
+func telegramNotifierFromEnv() (*notification.TelegramAlertNotifier, error) {
+	botToken := strings.TrimSpace(os.Getenv("KARASU_TELEGRAM_BOT_TOKEN"))
+	chatID := strings.TrimSpace(os.Getenv("KARASU_TELEGRAM_CHAT_ID"))
+
+	if botToken == "" && chatID == "" {
+		return nil, nil
+	}
+
+	return notification.NewTelegramAlertNotifier(botToken, chatID)
 }
