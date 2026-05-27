@@ -91,6 +91,7 @@ Variable d'environnement:
 - `KARASU_BACKFILL_CHUNK` (optionnel, defaut: `12h`)
 - `KARASU_ALERT_OPPORTUNITY_OR_MIN_SCORE` (optionnel, defaut: `70`)
 - `KARASU_ALERT_DECISION_URGENT_MIN_REDUCE` (optionnel, defaut: `1`)
+- `KARASU_ALERT_NOTIFY_COOLDOWN` (optionnel, defaut: `15m`, anti-bruit des notifications Telegram par clé d'alerte)
 
 Les durees utilisent le format Go (`30s`, `1m`, `5m`, `1h`).
 
@@ -126,6 +127,14 @@ Les durees utilisent le format Go (`30s`, `1m`, `5m`, `1h`).
 
 Si `KARASU_TELEGRAM_BOT_TOKEN` et `KARASU_TELEGRAM_CHAT_ID` sont renseignés, Karasu active le bot Telegram (commandes).
 L'envoi automatique des alertes est activé uniquement si `KARASU_TELEGRAM_ALERTS_ENABLED=true`.
+
+Commandes Telegram:
+
+- `/wallet`
+- `/opportunities`
+- `/decision`
+- `/health`
+- `/alerts`
 
 Quand l'envoi automatique est activé, Karasu pousse les transitions d'alertes dédoublonnées vers Telegram :
 

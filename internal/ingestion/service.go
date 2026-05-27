@@ -16,13 +16,14 @@ import (
 )
 
 const (
-	defaultTopSymbolsCount   = 30
-	defaultOtherBatchSize    = 80
-	defaultRepairLookback    = 6 * time.Hour
-	defaultBackfillChunk     = 12 * time.Hour
-	defaultBackfillQueue     = 128
-	defaultRateLimitCooldown = 30 * time.Minute
-	defaultAlertDedupWindow  = 5 * time.Minute
+	defaultTopSymbolsCount     = 30
+	defaultOtherBatchSize      = 80
+	defaultRepairLookback      = 6 * time.Hour
+	defaultBackfillChunk       = 12 * time.Hour
+	defaultBackfillQueue       = 128
+	defaultRateLimitCooldown   = 30 * time.Minute
+	defaultAlertDedupWindow    = 5 * time.Minute
+	defaultAlertNotifyCooldown = 15 * time.Minute
 )
 
 // LiveCandle is a real-time candle snapshot served by /api/live-1m.
@@ -140,6 +141,9 @@ type IngestionService struct {
 	alertNotifier        notification.AlertNotifier
 	alertORMinScore      float64
 	alertUrgentMinReduce int
+	alertNotifyCooldown  time.Duration
+	notifyMu             sync.Mutex
+	lastNotifiedByKey    map[string]time.Time
 	liveCache            *LiveCache
 	otherBatchSize       int
 	topSymbolsSize       int
@@ -175,6 +179,8 @@ func NewIngestionService(exchangeClient exchange.ExchangeClient, candleStore sto
 		backfillChunk:        defaultBackfillChunk,
 		alertORMinScore:      70,
 		alertUrgentMinReduce: 1,
+		alertNotifyCooldown:  defaultAlertNotifyCooldown,
+		lastNotifiedByKey:    make(map[string]time.Time),
 		allSymbols:           make([]string, 0),
 		topSymbols:           make([]string, 0),
 		backfillQueue:        make(chan backfillRequest, defaultBackfillQueue),
@@ -201,6 +207,16 @@ func (s *IngestionService) SetUrgentDecisionMinReduce(count int) error {
 	}
 	s.mu.Lock()
 	s.alertUrgentMinReduce = count
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *IngestionService) SetAlertNotifyCooldown(duration time.Duration) error {
+	if duration < 0 {
+		return fmt.Errorf("alert notify cooldown must be >= 0")
+	}
+	s.mu.Lock()
+	s.alertNotifyCooldown = duration
 	s.mu.Unlock()
 	return nil
 }
@@ -313,9 +329,51 @@ func (s *IngestionService) notifyAlert(event store.AlertEvent) {
 	if s.alertNotifier == nil {
 		return
 	}
+	if s.shouldThrottleAlertNotification(event) {
+		slog.Debug("alert notification throttled", "key", event.Key)
+		return
+	}
 	if err := s.alertNotifier.NotifyAlert(event); err != nil {
 		slog.Warn("failed to send alert notification", "key", event.Key, "err", err)
+		return
 	}
+	s.markAlertNotified(event)
+}
+
+func (s *IngestionService) shouldThrottleAlertNotification(event store.AlertEvent) bool {
+	if !event.Active || strings.TrimSpace(event.Key) == "" {
+		return false
+	}
+
+	s.mu.RLock()
+	cooldown := s.alertNotifyCooldown
+	s.mu.RUnlock()
+	if cooldown <= 0 {
+		return false
+	}
+
+	now := time.Now().UTC()
+	s.notifyMu.Lock()
+	defer s.notifyMu.Unlock()
+	last, ok := s.lastNotifiedByKey[event.Key]
+	if !ok {
+		return false
+	}
+	return now.Sub(last) < cooldown
+}
+
+func (s *IngestionService) markAlertNotified(event store.AlertEvent) {
+	if strings.TrimSpace(event.Key) == "" {
+		return
+	}
+
+	s.notifyMu.Lock()
+	defer s.notifyMu.Unlock()
+	if !event.Active {
+		delete(s.lastNotifiedByKey, event.Key)
+		return
+	}
+	s.lastNotifiedByKey[event.Key] = time.Now().UTC()
 }
 
 func (s *IngestionService) recordAlert(key, category string, severity store.AlertSeverity, message, source, symbol string) {

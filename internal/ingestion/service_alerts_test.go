@@ -2,6 +2,7 @@ package ingestion
 
 import (
 	"testing"
+	"time"
 
 	"karasu/internal/store"
 )
@@ -34,5 +35,44 @@ func TestUpsertAlertNotifiesOnlyOnTransitions(t *testing.T) {
 	}
 	if notifier.alerts[1].Active {
 		t.Fatal("expected second notification to be resolved")
+	}
+}
+
+func TestAlertNotificationCooldownThrottlesActiveTransitions(t *testing.T) {
+	t.Parallel()
+
+	service := NewIngestionService(nil, nil)
+	notifier := &alertNotifierSpy{}
+	service.SetAlertNotifier(notifier)
+	if err := service.SetAlertNotifyCooldown(time.Hour); err != nil {
+		t.Fatalf("failed to set notify cooldown: %v", err)
+	}
+
+	service.upsertAlert("decision:urgent:sell", "decision", store.AlertSeverityCritical, "urgent 1", "decision-engine", "", true)
+	service.upsertAlert("decision:urgent:sell", "decision", store.AlertSeverityCritical, "urgent 2", "decision-engine", "", true)
+
+	if len(notifier.alerts) != 1 {
+		t.Fatalf("expected 1 notification after cooldown throttling, got %d", len(notifier.alerts))
+	}
+}
+
+func TestAlertNotificationCooldownDoesNotThrottleResolve(t *testing.T) {
+	t.Parallel()
+
+	service := NewIngestionService(nil, nil)
+	notifier := &alertNotifierSpy{}
+	service.SetAlertNotifier(notifier)
+	if err := service.SetAlertNotifyCooldown(time.Hour); err != nil {
+		t.Fatalf("failed to set notify cooldown: %v", err)
+	}
+
+	service.upsertAlert("opportunity:gold", "opportunity", store.AlertSeverityInfo, "or 1", "opportunity-engine", "", true)
+	service.upsertAlert("opportunity:gold", "opportunity", store.AlertSeverityInfo, "resolved", "opportunity-engine", "", false)
+
+	if len(notifier.alerts) != 2 {
+		t.Fatalf("expected create+resolve notifications, got %d", len(notifier.alerts))
+	}
+	if notifier.alerts[1].Active {
+		t.Fatal("expected resolve notification to be active=false")
 	}
 }

@@ -117,6 +117,11 @@ func main() {
 		slog.Error("invalid alert setting", "env", "KARASU_ALERT_DECISION_URGENT_MIN_REDUCE", "err", err)
 		return
 	}
+	alertNotifyCooldown, err := durationFromEnv("KARASU_ALERT_NOTIFY_COOLDOWN", 15*time.Minute)
+	if err != nil {
+		slog.Error("invalid alert setting", "env", "KARASU_ALERT_NOTIFY_COOLDOWN", "err", err)
+		return
+	}
 	if err := ingestionService.SetRepairLookback(repairLookback); err != nil {
 		slog.Error("failed to configure ingestion repair lookback", "err", err)
 		return
@@ -131,6 +136,10 @@ func main() {
 	}
 	if err := ingestionService.SetUrgentDecisionMinReduce(alertUrgentMinReduce); err != nil {
 		slog.Error("failed to configure urgent decision alert threshold", "err", err)
+		return
+	}
+	if err := ingestionService.SetAlertNotifyCooldown(alertNotifyCooldown); err != nil {
+		slog.Error("failed to configure alert notify cooldown", "err", err)
 		return
 	}
 
@@ -165,6 +174,7 @@ func main() {
 		"backfillChunk", backfillChunk.String(),
 		"alertORMinScore", alertORMinScore,
 		"alertUrgentMinReduce", alertUrgentMinReduce,
+		"alertNotifyCooldown", alertNotifyCooldown.String(),
 	)
 	defer s.Stop()
 	s.Start()

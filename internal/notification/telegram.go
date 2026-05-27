@@ -28,6 +28,8 @@ const (
 	telegramCommandWallet        = "/wallet"
 	telegramCommandOpportunities = "/opportunities"
 	telegramCommandDecision      = "/decision"
+	telegramCommandHealth        = "/health"
+	telegramCommandAlerts        = "/alerts"
 	telegramCommandHelp          = "/help"
 )
 
@@ -155,6 +157,12 @@ func (n *TelegramAlertNotifier) commandResponse(message string) (string, bool, e
 	case telegramCommandDecision:
 		response, err := n.buildDecisionResponse()
 		return response, true, err
+	case telegramCommandHealth:
+		response, err := n.buildHealthResponse()
+		return response, true, err
+	case telegramCommandAlerts:
+		response, err := n.buildAlertsResponse()
+		return response, true, err
 	case telegramCommandHelp:
 		return telegramHelpMessage(), true, nil
 	default:
@@ -179,6 +187,8 @@ func normalizeTelegramCommand(message string) (string, bool) {
 		telegramCommandWallet:        telegramCommandWallet,
 		telegramCommandOpportunities: telegramCommandOpportunities,
 		telegramCommandDecision:      telegramCommandDecision,
+		telegramCommandHealth:        telegramCommandHealth,
+		telegramCommandAlerts:        telegramCommandAlerts,
 		"wallet":                     telegramCommandWallet,
 		"portefeuille":               telegramCommandWallet,
 		"opportunites":               telegramCommandOpportunities,
@@ -186,6 +196,10 @@ func normalizeTelegramCommand(message string) (string, bool) {
 		"scanner":                    telegramCommandOpportunities,
 		"decision":                   telegramCommandDecision,
 		"vendre":                     telegramCommandDecision,
+		"health":                     telegramCommandHealth,
+		"sante":                      telegramCommandHealth,
+		"alerts":                     telegramCommandAlerts,
+		"alertes":                    telegramCommandAlerts,
 	}
 
 	normalized, ok := alias[command]
@@ -289,6 +303,82 @@ func (n *TelegramAlertNotifier) buildDecisionResponse() (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
+func (n *TelegramAlertNotifier) buildHealthResponse() (string, error) {
+	now := time.Now().UTC()
+	lines := []string{"🩺 Santé rapide"}
+
+	status := "ok"
+	if _, err := n.exchangeClient.Wallet(); err != nil {
+		status = "degrade"
+		lines = append(lines, "Exchange: indisponible")
+	} else {
+		lines = append(lines, "Exchange: disponible")
+	}
+
+	opportunities, oppErr := market.TopOpportunities(n.exchangeClient, n.candleStore, 20)
+	if oppErr != nil {
+		status = "degrade"
+		lines = append(lines, "Scanner: indisponible")
+	} else {
+		actionable := 0
+		for _, opportunity := range opportunities {
+			if opportunity.PriorityBand == "actionable" {
+				actionable++
+			}
+		}
+		lines = append(lines, fmt.Sprintf("Scanner: %d opportunites (%d actionnables)", len(opportunities), actionable))
+	}
+
+	activeAlerts := 0
+	if alertStore, ok := n.candleStore.(store.AlertStore); ok {
+		alerts, total, err := alertStore.ListAlerts(5, 0, true)
+		if err != nil {
+			status = "degrade"
+			lines = append(lines, "Alertes: lecture indisponible")
+		} else {
+			activeAlerts = total
+			if len(alerts) > 0 {
+				lines = append(lines, fmt.Sprintf("Alertes actives: %d (ex: %s)", total, alerts[0].Key))
+			} else {
+				lines = append(lines, "Alertes actives: 0")
+			}
+		}
+	}
+
+	if activeAlerts > 0 {
+		status = "degrade"
+	}
+
+	lines = append(lines, fmt.Sprintf("Etat global: %s", strings.ToUpper(status)))
+	lines = append(lines, fmt.Sprintf("Horodatage: %s", now.Format("2006-01-02 15:04:05 UTC")))
+
+	return strings.Join(lines, "\n"), nil
+}
+
+func (n *TelegramAlertNotifier) buildAlertsResponse() (string, error) {
+	alertStore, ok := n.candleStore.(store.AlertStore)
+	if !ok {
+		return "⚠️ Alertes\nLa source d alertes n est pas disponible.", nil
+	}
+
+	alerts, total, err := alertStore.ListAlerts(5, 0, true)
+	if err != nil {
+		return "", fmt.Errorf("alertes indisponibles: %w", err)
+	}
+
+	if total == 0 {
+		return "✅ Alertes\nAucune alerte active.", nil
+	}
+
+	lines := []string{fmt.Sprintf("🚨 Alertes actives (%d)", total)}
+	for i, alert := range alerts {
+		lines = append(lines, fmt.Sprintf("%d. %s %s", i+1, telegramAlertPrefix(alert), alert.Message))
+		lines = append(lines, fmt.Sprintf("   [%s/%s] %s", alert.Category, alert.Severity, alert.Key))
+	}
+
+	return strings.Join(lines, "\n"), nil
+}
+
 func (n *TelegramAlertNotifier) sendText(ctx context.Context, chatID, text string) error {
 	if n == nil || n.bot == nil {
 		return fmt.Errorf("telegram notifier is nil")
@@ -315,6 +405,10 @@ func telegramQuickReplyKeyboard() *telego.ReplyKeyboardMarkup {
 			tu.KeyboardButton("wallet"),
 			tu.KeyboardButton("opportunites"),
 			tu.KeyboardButton("decision"),
+		),
+		tu.KeyboardRow(
+			tu.KeyboardButton("health"),
+			tu.KeyboardButton("alertes"),
 		),
 	).WithResizeKeyboard().WithInputFieldPlaceholder("Choisis une action rapide")
 
@@ -531,11 +625,11 @@ func telegramAlertState(alert store.AlertEvent) string {
 }
 
 func telegramHelpMessage() string {
-	return "Commandes disponibles:\n/wallet\n/opportunities\n/decision\n\n" + telegramQuickRepliesMessage()
+	return "Commandes disponibles:\n/wallet\n/opportunities\n/decision\n/health\n/alerts\n\n" + telegramQuickRepliesMessage()
 }
 
 func telegramQuickRepliesMessage() string {
-	return "Réponses rapides:\n- wallet\n- opportunites\n- decision\n\nTu peux aussi utiliser /help"
+	return "Réponses rapides:\n- wallet\n- opportunites\n- decision\n- health\n- alertes\n\nTu peux aussi utiliser /help"
 }
 
 func translateTelegramPrimaryAction(action string) string {
