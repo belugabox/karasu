@@ -433,6 +433,25 @@ func netEURFromTransaction(tx bitvavo.AccountTransaction) float64 {
 	return net
 }
 
+// PlaceMarketOrder places a market order for the given symbol using EUR as the quote currency.
+// For both buy and sell sides the amountEUR parameter specifies the EUR value to trade.
+func (c BitvavoClient) PlaceMarketOrder(symbol string, side string, amountEUR float64) (OrderResult, error) {
+	market := symbolToMarket(symbol)
+	body := map[string]string{
+		"amountQuote": strconv.FormatFloat(amountEUR, 'f', 2, 64),
+	}
+	order, err := c.api.PlaceOrder(market, side, "market", body)
+	if err != nil {
+		return OrderResult{}, fmt.Errorf("bitvavo PlaceOrder failed: %w", err)
+	}
+	return OrderResult{
+		OrderID: order.OrderId,
+		Market:  order.Market,
+		Side:    order.Side,
+		Status:  order.Status,
+	}, nil
+}
+
 func (c BitvavoClient) Candles1mByDate(symbol string, date time.Time) (CandleBundle, error) {
 	start := date.Add(-24 * time.Hour)
 	end := date

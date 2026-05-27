@@ -65,10 +65,18 @@ type WalletAsset struct {
 	Value          float64 // value of the asset in EUR
 }
 
+type OrderResult struct {
+	OrderID string // unique order identifier
+	Market  string // market, e.g., "BTC-EUR"
+	Side    string // "buy" or "sell"
+	Status  string // order status, e.g., "new", "filled"
+}
+
 type ExchangeClient interface {
 	Symbols() (map[string]string, error) // symbol to label, e.g., "BTC" to "Bitcoin"
 	Prices() (map[string]float64, error) // symbol to price in EUR
 	Wallet() (Wallet, error)
+	PlaceMarketOrder(symbol string, side string, amountEUR float64) (OrderResult, error) // places a market order for the given symbol
 
 	Candles1mByDate(symbol string, date time.Time) (CandleBundle, error)
 	Candles5mByDate(symbol string, date time.Time) (CandleBundle, error)

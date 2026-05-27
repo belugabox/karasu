@@ -35,6 +35,7 @@ func NewRouter(
 	handlers.RegisterCandles(router, ingestionService, candleStore)
 	handlers.RegisterBackfill(router, ingestionService)
 	handlers.RegisterWallet(router, exchangeClient)
+	handlers.RegisterOrder(router, exchangeClient)
 
 	router.NoRoute(gin.WrapH(spaHandler))
 

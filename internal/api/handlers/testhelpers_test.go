@@ -23,6 +23,8 @@ type fakeExchangeClient struct {
 	candlesLast24hErr error
 	candles1m         map[string]exchange.CandleBundle
 	candles1mErr      map[string]error
+	placeOrderResult  exchange.OrderResult
+	placeOrderErr     error
 }
 
 func (f *fakeExchangeClient) Symbols() (map[string]string, error) {
@@ -66,6 +68,13 @@ func (f *fakeExchangeClient) CandlesLast24h() ([]exchange.CandleBundle, error) {
 
 func (f *fakeExchangeClient) Candles(symbol string, start time.Time, end time.Time, interval exchange.Interval) (exchange.CandleBundle, error) {
 	return exchange.CandleBundle{}, nil
+}
+
+func (f *fakeExchangeClient) PlaceMarketOrder(symbol string, side string, amountEUR float64) (exchange.OrderResult, error) {
+	if f.placeOrderErr != nil {
+		return exchange.OrderResult{}, f.placeOrderErr
+	}
+	return f.placeOrderResult, nil
 }
 
 // --- fake candle store ---

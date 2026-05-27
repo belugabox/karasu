@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { type Opportunity } from '../models/market'
 import { formatNumber, formatSignedPercent } from '../utils/format'
 import {
@@ -10,6 +11,7 @@ import {
   translateRisk,
   translateStateLabel,
 } from '../utils/market-translations'
+import { TradeModal } from './TradeModal'
 
 const priorityBands = [
   { value: 'all', label: 'Toutes les priorites' },
@@ -44,6 +46,7 @@ export function ScannerSection({
   onConsensusOnlyChange,
   onSelectSymbol,
 }: ScannerSectionProps) {
+  const [tradeSymbol, setTradeSymbol] = useState<string | null>(null)
   const filtered = opportunities.filter((opportunity) => {
     if (priorityBandFilter !== 'all' && opportunity.priorityBand !== priorityBandFilter) {
       return false
@@ -78,6 +81,13 @@ export function ScannerSection({
 
   return (
     <section className="scanner-panel">
+      {tradeSymbol && (
+        <TradeModal
+          symbol={tradeSymbol}
+          side="buy"
+          onClose={() => setTradeSymbol(null)}
+        />
+      )}
       <div className="panel-head scanner-head">
         <div>
           <h2>Scanner d opportunites</h2>
@@ -149,9 +159,18 @@ export function ScannerSection({
                   </div>
                   <p className="card-description">{translateOpportunitySummary(opportunity.summary)}</p>
                 </div>
-                <button type="button" className="action-button" onClick={() => onSelectSymbol(opportunity.symbol)}>
-                  Ouvrir
-                </button>
+                <div className="strategy-inline-list">
+                  <button type="button" className="action-button" onClick={() => onSelectSymbol(opportunity.symbol)}>
+                    Ouvrir
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button trade-buy-button"
+                    onClick={() => setTradeSymbol(opportunity.symbol)}
+                  >
+                    Acheter
+                  </button>
+                </div>
               </div>
 
               <div className="scanner-metric-grid">
