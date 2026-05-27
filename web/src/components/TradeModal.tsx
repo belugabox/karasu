@@ -37,7 +37,7 @@ export function TradeModal({ symbol, side, suggestedAmountEur, onClose }: TradeM
       const order = await placeMarketOrder({ symbol, side, amountEur: amount })
       setResult(order)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erreur lors du passage de l ordre')
+      setError(err instanceof Error ? err.message : "Erreur lors du passage de l'ordre")
     } finally {
       setSubmitting(false)
     }
@@ -54,7 +54,7 @@ export function TradeModal({ symbol, side, suggestedAmountEur, onClose }: TradeM
         {result ? (
           <div>
             <p className="success-text">
-              Ordre place avec succes — ID : {result.orderID || '—'} · Statut : {result.status}
+              Ordre placé avec succès — ID : {result.orderID || '—'} · Statut : {result.status}
             </p>
             <button type="button" className="action-button" onClick={onClose}>Fermer</button>
           </div>
@@ -62,8 +62,8 @@ export function TradeModal({ symbol, side, suggestedAmountEur, onClose }: TradeM
           <form onSubmit={handleSubmit}>
             <p className="trade-modal-desc">
               {isBuy
-                ? `Saisir le montant en EUR a depenser pour acheter ${symbol} au prix du marche.`
-                : `Saisir le montant en EUR de ${symbol} a vendre au prix du marche.`}
+                ? `Saisir le montant en EUR à dépenser pour acheter ${symbol} au prix du marché.`
+                : `Saisir le montant en EUR de ${symbol} à vendre au prix du marché.`}
             </p>
             <label className="trade-modal-label" htmlFor="trade-amount">Montant (EUR)</label>
             <input
