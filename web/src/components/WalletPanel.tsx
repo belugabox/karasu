@@ -5,12 +5,20 @@ import type { Opportunity } from '../models/market'
 import { getOpportunities } from '../services/marketService'
 import { getWallet } from '../services/walletService'
 import { formatNumber, formatSignedPercent } from '../utils/format'
+import { translatePriorityBand, translateStateLabel } from '../utils/market-translations'
+
+type WalletSortKey = 'value' | 'pnl' | 'score' | 'change24h' | 'change1h'
 
 type AssetMetrics = {
   effectiveValue: number
   effectiveCostBasis: number
   pnlValue: number
   pnlPercent: number
+}
+
+function getChangeClassName(change: number | undefined): string {
+  if (change === undefined) return 'col-hidden-mobile'
+  return `col-hidden-mobile ${change < 0 ? 'negative' : 'positive'}`
 }
 
 export function WalletPanel() {
@@ -21,6 +29,7 @@ export function WalletPanel() {
   const [error, setError] = useState('')
   const [opportunitiesError, setOpportunitiesError] = useState('')
   const [includeStakingInPnl, setIncludeStakingInPnl] = useState(true)
+  const [walletSortKey, setWalletSortKey] = useState<WalletSortKey>('value')
 
   const loadWallet = useCallback(async () => {
     setLoading(true)
@@ -167,6 +176,44 @@ export function WalletPanel() {
     }
   }, [heldOpportunityMap, visibleAssets])
 
+  const decisionMap = useMemo(() => {
+    const map = new Map<string, 'reduce' | 'watch' | 'reinforce'>()
+    const entries: Array<['reduce' | 'watch' | 'reinforce', typeof walletDecisions.reduce]> = [
+      ['reduce', walletDecisions.reduce],
+      ['watch', walletDecisions.watch],
+      ['reinforce', walletDecisions.reinforce],
+    ]
+    for (const [decision, items] of entries) {
+      for (const item of items) {
+        map.set(item.symbol, decision)
+      }
+    }
+    return map
+  }, [walletDecisions])
+
+  const sortedVisibleAssets = useMemo(() => {
+    return [...visibleAssets].sort((a, b) => {
+      const aMetrics = pnlMetrics.bySymbol.get(a.symbol.toUpperCase())
+      const bMetrics = pnlMetrics.bySymbol.get(b.symbol.toUpperCase())
+      const aOpp = heldOpportunityMap.get(a.symbol.toUpperCase())
+      const bOpp = heldOpportunityMap.get(b.symbol.toUpperCase())
+
+      switch (walletSortKey) {
+        case 'pnl':
+          return (bMetrics?.pnlPercent ?? b.pnlPercent) - (aMetrics?.pnlPercent ?? a.pnlPercent)
+        case 'score':
+          return (bOpp?.qualityScore ?? -1) - (aOpp?.qualityScore ?? -1)
+        case 'change24h':
+          return (bOpp?.change24h ?? 0) - (aOpp?.change24h ?? 0)
+        case 'change1h':
+          return (bOpp?.change1h ?? 0) - (aOpp?.change1h ?? 0)
+        case 'value':
+        default:
+          return b.value - a.value
+      }
+    })
+  }, [visibleAssets, walletSortKey, pnlMetrics.bySymbol, heldOpportunityMap])
+
   return (
     <section className="panel">
       <div className="panel-head">
@@ -175,6 +222,19 @@ export function WalletPanel() {
           <p>Vue synthetique du portefeuille, des soldes et de la performance.</p>
         </div>
         <div className="panel-head-actions">
+          <label className="inline-label" htmlFor="sort-wallet">Trier par</label>
+          <select
+            id="sort-wallet"
+            className="select-input"
+            value={walletSortKey}
+            onChange={(event) => setWalletSortKey(event.target.value as WalletSortKey)}
+          >
+            <option value="value">Valeur</option>
+            <option value="pnl">PnL %</option>
+            <option value="score">Score</option>
+            <option value="change24h">24h %</option>
+            <option value="change1h">1h %</option>
+          </select>
           <button
             type="button"
             className="action-button"
@@ -284,16 +344,25 @@ export function WalletPanel() {
                 <th>PRU</th>
                 <th>PnL</th>
                 <th>Valeur</th>
+                <th className="col-hidden-mobile">Score</th>
+                <th className="col-hidden-mobile">24h</th>
+                <th className="col-hidden-mobile">1h</th>
+                <th className="col-hidden-mobile">Signal</th>
               </tr>
             </thead>
             <tbody>
-              {visibleAssets.map((asset) => {
+              {sortedVisibleAssets.map((asset) => {
                 const metrics = pnlMetrics.bySymbol.get(asset.symbol.toUpperCase())
                 const pnlValue = metrics?.pnlValue ?? asset.pnlValue
                 const pnlPercent = metrics?.pnlPercent ?? asset.pnlPercent
+                const opportunity = heldOpportunityMap.get(asset.symbol.toUpperCase())
+                const decision = decisionMap.get(asset.symbol.toUpperCase())
 
                 return (
-                  <tr key={asset.symbol}>
+                  <tr
+                    key={asset.symbol}
+                    className={decision ? `wallet-row wallet-${decision}` : 'wallet-row'}
+                  >
                     <td>{asset.symbol}</td>
                     <td>{formatNumber(asset.amount, 8)}</td>
                     <td>{formatNumber(asset.inOrder, 8)}</td>
@@ -304,6 +373,29 @@ export function WalletPanel() {
                       {formatNumber(pnlValue, 2)} EUR ({formatSignedPercent(pnlPercent)})
                     </td>
                     <td>{formatNumber(asset.value, 2)} EUR</td>
+                    <td className="col-hidden-mobile">
+                      {opportunity ? formatNumber(opportunity.qualityScore, 1) : <span className="muted-text">-</span>}
+                    </td>
+                    <td className={getChangeClassName(opportunity?.change24h)}>
+                      {opportunity ? formatSignedPercent(opportunity.change24h) : <span className="muted-text">-</span>}
+                    </td>
+                    <td className={getChangeClassName(opportunity?.change1h)}>
+                      {opportunity ? formatSignedPercent(opportunity.change1h) : <span className="muted-text">-</span>}
+                    </td>
+                    <td className="col-hidden-mobile">
+                      {opportunity ? (
+                        <div className="strategy-inline-list">
+                          <span className={`state-pill strategy-state ${opportunity.leader.state}`}>
+                            {translateStateLabel(opportunity.leader.state)}
+                          </span>
+                          <span className={`priority-pill ${opportunity.priorityBand}`}>
+                            {translatePriorityBand(opportunity.priorityBand)}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="muted-text">-</span>
+                      )}
+                    </td>
                   </tr>
                 )
               })}
