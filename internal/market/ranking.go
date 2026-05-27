@@ -38,12 +38,15 @@ type Market struct {
 }
 
 type StrategyEvaluation struct {
-	Name    string
-	Label   string
-	State   string
-	Score   float64
-	Reasons []string
-	Risks   []string
+	Name        string
+	Label       string
+	Description string
+	Icon        string
+	Color       string
+	State       string
+	Score       float64
+	Reasons     []string
+	Risks       []string
 }
 
 type MarketAnalysis struct {
@@ -65,10 +68,13 @@ type SignalHistory struct {
 }
 
 type SignalProfileHistory struct {
-	Name   string
-	Label  string
-	Stats  SignalProfileStats
-	Points []SignalPoint
+	Name        string
+	Label       string
+	Description string
+	Icon        string
+	Color       string
+	Stats       SignalProfileStats
+	Points      []SignalPoint
 }
 
 type SignalProfileStats struct {
@@ -447,10 +453,13 @@ func BuildSignalHistory(symbol string, timeframe string, candles []exchange.Cand
 			})
 		}
 		history.Profiles = append(history.Profiles, SignalProfileHistory{
-			Name:   profileHistory.Profile.Name,
-			Label:  profileHistory.Profile.Label,
-			Stats:  computeSignalProfileStats(points),
-			Points: points,
+			Name:        profileHistory.Profile.Name,
+			Label:       profileHistory.Profile.Label,
+			Description: profileHistory.Profile.Description,
+			Icon:        profileHistory.Profile.Icon,
+			Color:       profileHistory.Profile.Color,
+			Stats:       computeSignalProfileStats(points),
+			Points:      points,
 		})
 	}
 
@@ -606,12 +615,15 @@ func computeStrategyEvaluationsFromExchangeCandles(candles []exchange.Candle) []
 	result := make([]StrategyEvaluation, 0, len(evaluations))
 	for _, evaluation := range evaluations {
 		result = append(result, StrategyEvaluation{
-			Name:    evaluation.Profile.Name,
-			Label:   evaluation.Profile.Label,
-			State:   string(evaluation.State),
-			Score:   roundTo(evaluation.Score, 2),
-			Reasons: append([]string(nil), evaluation.Reasons...),
-			Risks:   append([]string(nil), evaluation.Risks...),
+			Name:        evaluation.Profile.Name,
+			Label:       evaluation.Profile.Label,
+			Description: evaluation.Profile.Description,
+			Icon:        evaluation.Profile.Icon,
+			Color:       evaluation.Profile.Color,
+			State:       string(evaluation.State),
+			Score:       roundTo(evaluation.Score, 2),
+			Reasons:     append([]string(nil), evaluation.Reasons...),
+			Risks:       append([]string(nil), evaluation.Risks...),
 		})
 	}
 

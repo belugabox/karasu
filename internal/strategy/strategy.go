@@ -20,6 +20,9 @@ const (
 type Profile struct {
 	Name           string
 	Label          string
+	Description    string
+	Icon           string
+	Color          string
 	Timeframe      string
 	RecentLookback int
 	MinRecentMove  float64
@@ -57,7 +60,10 @@ type ProfileHistory struct {
 func IntradayMomentumProfile() Profile {
 	return Profile{
 		Name:           "intraday-momentum",
-		Label:          "Intraday Momentum",
+		Label:          "Pulse",
+		Description:    "Court terme reactif pour capter les impulsions de prix et volume.",
+		Icon:           "⚡",
+		Color:          "#f97316",
 		Timeframe:      "short",
 		RecentLookback: 5,
 		MinRecentMove:  1.2,
@@ -74,7 +80,10 @@ func IntradayMomentumProfile() Profile {
 func SwingProfile() Profile {
 	return Profile{
 		Name:           "swing-balance",
-		Label:          "Swing Balance",
+		Label:          "Balance",
+		Description:    "Swing equilibre pour filtrer les signaux et suivre les structures constructives.",
+		Icon:           "⚖️",
+		Color:          "#14b8a6",
 		Timeframe:      "medium",
 		RecentLookback: 8,
 		MinRecentMove:  0.6,
@@ -92,7 +101,10 @@ func SwingProfile() Profile {
 func TrendProfile() Profile {
 	return Profile{
 		Name:           "trend-follow",
-		Label:          "Trend Follow",
+		Label:          "Trend",
+		Description:    "Long terme de suivi de tendance pour privilegier les mouvements durables.",
+		Icon:           "📈",
+		Color:          "#2563eb",
 		Timeframe:      "long",
 		RecentLookback: 12,
 		MinRecentMove:  0.4,

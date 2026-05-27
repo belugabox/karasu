@@ -16,15 +16,23 @@ export function formatBarsAgo(value: number): string {
 
 export function translateProfileLabel(label: string): string {
   switch (label) {
-    case 'Intraday Momentum':
-      return 'Momentum intraday'
-    case 'Swing Balance':
-      return 'Swing equilibre'
-    case 'Trend Follow':
-      return 'Suivi de tendance'
+    case 'Pulse':
+      return 'Pulse'
+    case 'Balance':
+      return 'Balance'
+    case 'Trend':
+      return 'Trend'
     default:
       return label
   }
+}
+
+export function formatProfileDisplay(label: string, icon?: string): string {
+  const translated = translateProfileLabel(label)
+  if (!icon) {
+    return translated
+  }
+  return `${icon} ${translated}`
 }
 
 export function translateStateLabel(state: string): string {

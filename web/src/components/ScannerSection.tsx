@@ -2,10 +2,10 @@ import { type Opportunity } from '../models/market'
 import { formatNumber, formatSignedPercent } from '../utils/format'
 import {
   formatBarsAgo,
+  formatProfileDisplay,
   translateOpportunitySummary,
   translatePrimaryAction,
   translatePriorityBand,
-  translateProfileLabel,
   translateReason,
   translateRisk,
   translateStateLabel,
@@ -165,7 +165,9 @@ export function ScannerSection({
                 </div>
                 <div>
                   <span>Profil leader</span>
-                  <strong>{translateProfileLabel(opportunity.leader.label || 'n/a')}</strong>
+                  <strong style={{ color: opportunity.leader.color || undefined }}>
+                    {formatProfileDisplay(opportunity.leader.label || 'n/a', opportunity.leader.icon)}
+                  </strong>
                 </div>
                 <div>
                   <span>Etat leader</span>
@@ -176,6 +178,7 @@ export function ScannerSection({
               </div>
 
               <div className="analysis-tag-list">
+                {opportunity.leader.description && <span className="analysis-tag">profil : {opportunity.leader.description}</span>}
                 <span className="analysis-tag">qualite : {formatNumber(opportunity.qualityScore, 1)}</span>
                 <span className="analysis-tag">1h: {formatSignedPercent(opportunity.change1h, 2)}</span>
                 <span className="analysis-tag">5m: {formatSignedPercent(opportunity.change5m, 2)}</span>

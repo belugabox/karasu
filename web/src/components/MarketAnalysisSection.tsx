@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { type Market, type MarketAnalysis, type MarketSignalHistory } from '../models/market'
 import { formatNumber, formatSignedPercent } from '../utils/format'
-import { formatBarsAgo, translateProfileLabel, translateReason, translateRisk, translateStateLabel } from '../utils/market-translations'
+import { formatBarsAgo, formatProfileDisplay, translateReason, translateRisk, translateStateLabel } from '../utils/market-translations'
 
 function getStrategyConvergence(strategies: Market['strategies']) {
   const active = strategies.filter((strategy) => strategy.state === 'entry' || strategy.state === 'hold')
@@ -96,15 +96,15 @@ export function MarketAnalysisSection({
       }
 
       if (previous.state !== 'entry' && latest.state === 'entry') {
-        alerts.push(`${translateProfileLabel(profile.label)} vient de passer en entree.`)
+        alerts.push(`${formatProfileDisplay(profile.label, profile.icon)} vient de passer en entree.`)
       }
 
       if ((previous.state === 'entry' || previous.state === 'hold') && latest.state === 'exit') {
-        alerts.push(`${translateProfileLabel(profile.label)} vient de passer d une configuration active a une sortie.`)
+        alerts.push(`${formatProfileDisplay(profile.label, profile.icon)} vient de passer d une configuration active a une sortie.`)
       }
 
       if (previous.state === 'hold' && latest.state === 'watch') {
-        alerts.push(`${translateProfileLabel(profile.label)} est passe de maintien a surveillance.`)
+        alerts.push(`${formatProfileDisplay(profile.label, profile.icon)} est passe de maintien a surveillance.`)
       }
     })
 
@@ -177,15 +177,20 @@ export function MarketAnalysisSection({
                 <div className="comparison-grid">
                   <article className="comparison-metric-card">
                     <span>Leader actuel</span>
-                    <strong>{translateProfileLabel(selectedMarketComparison.leader.label)}</strong>
+                    <strong style={{ color: selectedMarketComparison.leader.color || undefined }}>
+                      {formatProfileDisplay(selectedMarketComparison.leader.label, selectedMarketComparison.leader.icon)}
+                    </strong>
                     <p>
                       Etat {translateStateLabel(selectedMarketComparison.leader.state)}, score {formatNumber(selectedMarketComparison.leader.score, 2)}
-                      {selectedMarketComparison.runnerUp ? `, ecart ${formatNumber(selectedMarketComparison.scoreGap, 2)} vs ${translateProfileLabel(selectedMarketComparison.runnerUp.label)}` : ''}
+                      {selectedMarketComparison.runnerUp ? `, ecart ${formatNumber(selectedMarketComparison.scoreGap, 2)} vs ${formatProfileDisplay(selectedMarketComparison.runnerUp.label, selectedMarketComparison.runnerUp.icon)}` : ''}
                     </p>
+                    {selectedMarketComparison.leader.description && <p>{selectedMarketComparison.leader.description}</p>}
                   </article>
                   <article className="comparison-metric-card">
                     <span>Meilleur setup actif</span>
-                    <strong>{selectedMarketComparison.activeCandidate ? translateProfileLabel(selectedMarketComparison.activeCandidate.label) : 'Aucun profil actif'}</strong>
+                    <strong style={{ color: selectedMarketComparison.activeCandidate?.color || undefined }}>
+                      {selectedMarketComparison.activeCandidate ? formatProfileDisplay(selectedMarketComparison.activeCandidate.label, selectedMarketComparison.activeCandidate.icon) : 'Aucun profil actif'}
+                    </strong>
                     <p>
                       {selectedMarketComparison.activeCandidate
                         ? `${translateStateLabel(selectedMarketComparison.activeCandidate.state)} avec un score de ${formatNumber(selectedMarketComparison.activeCandidate.score, 2)}`
@@ -194,7 +199,9 @@ export function MarketAnalysisSection({
                   </article>
                   <article className="comparison-metric-card">
                     <span>Profil le plus stable</span>
-                    <strong>{selectedMarketComparison.stableProfile ? translateProfileLabel(selectedMarketComparison.stableProfile.label) : 'Pas encore d historique'}</strong>
+                    <strong style={{ color: selectedMarketComparison.stableProfile?.color || undefined }}>
+                      {selectedMarketComparison.stableProfile ? formatProfileDisplay(selectedMarketComparison.stableProfile.label, selectedMarketComparison.stableProfile.icon) : 'Pas encore d historique'}
+                    </strong>
                     <p>
                       {selectedMarketComparison.stableProfile
                         ? `${formatNumber(selectedMarketComparison.stableProfile.stats.stabilityRate, 1)}% de stabilite d etat sur les recentes bougies ${historyTimeframeLabel}.`
@@ -220,7 +227,9 @@ export function MarketAnalysisSection({
                   </article>
                   <article className="comparison-metric-card">
                     <span>Le plus rapide vers l entree</span>
-                    <strong>{selectedMarketComparison.fastestEntryProfile ? translateProfileLabel(selectedMarketComparison.fastestEntryProfile.label) : 'Pas encore d historique'}</strong>
+                    <strong style={{ color: selectedMarketComparison.fastestEntryProfile?.color || undefined }}>
+                      {selectedMarketComparison.fastestEntryProfile ? formatProfileDisplay(selectedMarketComparison.fastestEntryProfile.label, selectedMarketComparison.fastestEntryProfile.icon) : 'Pas encore d historique'}
+                    </strong>
                     <p>
                       {selectedMarketComparison.fastestEntryProfile
                         ? `${formatNumber(selectedMarketComparison.fastestEntryProfile.stats.entryTransitionRate, 1)}% des changements d etat ont bascule vers une entree.`
@@ -256,9 +265,10 @@ export function MarketAnalysisSection({
                 {analysis.strategies.map((strategy) => (
                   <div key={strategy.name} className="strategy-detail-item">
                     <div className="strategy-detail-head">
-                      <strong>{translateProfileLabel(strategy.label)}</strong>
+                      <strong style={{ color: strategy.color || undefined }}>{formatProfileDisplay(strategy.label, strategy.icon)}</strong>
                       <span className={`state-pill strategy-state ${strategy.state}`}>{translateStateLabel(strategy.state)}</span>
                     </div>
+                    {strategy.description && <p className="muted-text">{strategy.description}</p>}
                     <p className="muted-text">Score {formatNumber(strategy.score, 2)}</p>
                     <div className="analysis-tag-list">
                       {strategy.reasons.map((reason) => (
@@ -290,13 +300,14 @@ export function MarketAnalysisSection({
                     {signalHistory.profiles.map((profileStat) => (
                       <article key={profileStat.name} className="signal-summary-card">
                         <div className="signal-summary-head">
-                          <h5>{translateProfileLabel(profileStat.label)}</h5>
+                          <h5 style={{ color: profileStat.color || undefined }}>{formatProfileDisplay(profileStat.label, profileStat.icon)}</h5>
                           {profileStat.stats.justEntered && <span className="fresh-badge entry">entree fraiche</span>}
                           {profileStat.stats.justExited && <span className="fresh-badge exit">sortie fraiche</span>}
                           {!profileStat.stats.justEntered && !profileStat.stats.justExited && profileStat.stats.justChanged && (
                             <span className="fresh-badge neutral">nouvel etat</span>
                           )}
                         </div>
+                        {profileStat.description && <p className="card-description">{profileStat.description}</p>}
                         <p className="card-description">
                           Dernier etat {translateStateLabel(profileStat.stats.latestState)}, score moyen {formatNumber(profileStat.stats.averageScore, 2)} sur la fenetre recente.
                           Les transitions vers l entree et la duree des phases de maintien sont calculees par le backend a partir des bougies {historyTimeframeLabel} stockees.
@@ -343,7 +354,7 @@ export function MarketAnalysisSection({
                       <div key={profile.name} className="strategy-detail-item">
                         <div className="strategy-detail-head">
                           <div className="strategy-detail-title">
-                            <strong>{translateProfileLabel(profile.label)}</strong>
+                            <strong style={{ color: profile.color || undefined }}>{formatProfileDisplay(profile.label, profile.icon)}</strong>
                             {profile.stats.justEntered && <span className="fresh-badge entry">entree fraiche</span>}
                             {profile.stats.justExited && <span className="fresh-badge exit">sortie fraiche</span>}
                             {!profile.stats.justEntered && !profile.stats.justExited && profile.stats.justChanged && (
@@ -353,8 +364,9 @@ export function MarketAnalysisSection({
                           {latest && <span className={`state-pill strategy-state ${latest.state}`}>{translateStateLabel(latest.state)}</span>}
                         </div>
                         <p className="card-description">
-                          Chronologie des etats recents pour {translateProfileLabel(profile.label)}. Un badge represente une bougie {historyTimeframeLabel} stockee. Le survol d un badge affiche l horodatage et le score.
+                          Chronologie des etats recents pour {formatProfileDisplay(profile.label, profile.icon)}. Un badge represente une bougie {historyTimeframeLabel} stockee. Le survol d un badge affiche l horodatage et le score.
                         </p>
+                        {profile.description && <p className="card-description">{profile.description}</p>}
                         <div className="analysis-tag-list">
                           <span className="analysis-tag">age de l etat : {profile.stats.latestStateAgeBars} bougies</span>
                           <span className="analysis-tag">derniere entree : {formatBarsAgo(profile.stats.barsSinceEntry)}</span>

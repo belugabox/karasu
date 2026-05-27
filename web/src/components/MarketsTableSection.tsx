@@ -1,13 +1,13 @@
 import { useMemo } from 'react'
 import { type Market, type MarketSortKey, type Opportunity } from '../models/market'
 import { formatNumber, formatSignedPercent } from '../utils/format'
-import { translatePriorityBand, translateProfileLabel, translateStateLabel } from '../utils/market-translations'
+import { formatProfileDisplay, translatePriorityBand, translateProfileLabel, translateStateLabel } from '../utils/market-translations'
 
 const strategyProfiles = [
   { value: 'all', label: 'Tous les profils' },
-  { value: 'intraday-momentum', label: 'Momentum intraday' },
-  { value: 'swing-balance', label: 'Swing equilibre' },
-  { value: 'trend-follow', label: 'Suivi de tendance' },
+  { value: 'intraday-momentum', label: 'Pulse' },
+  { value: 'swing-balance', label: 'Balance' },
+  { value: 'trend-follow', label: 'Trend' },
 ]
 
 const strategyStates = [
@@ -337,19 +337,20 @@ export function MarketsTableSection({
 
                       return (
                         <p className="strategy-row-summary">
-                          Leader {translateProfileLabel(leader.label)} en <strong>{translateStateLabel(leader.state)}</strong>
+                          Leader <span style={{ color: leader.color || undefined }}>{formatProfileDisplay(leader.label, leader.icon)}</span> en <strong>{translateStateLabel(leader.state)}</strong>
                           {runnerUp ? ` | ecart ${formatNumber(leader.score - runnerUp.score, 1)}` : ''}
                           {priority ? ` | ${translatePriorityBand(priority.priorityBand)}` : ''}
                           {priority?.freshness.hasFreshEntry ? ' | entree fraiche' : ''}
                           {convergence.hasConsensus ? ` | consensus ${convergence.activeCount}/3 actifs` : ''}
                           {!convergence.hasConsensus && convergence.hasConstructiveAlignment ? ` | ${convergence.constructiveCount}/3 constructifs` : ''}
+                          {leader.description ? ` | ${leader.description}` : ''}
                         </p>
                       )
                     })()}
                     <div className="strategy-inline-list">
                       {market.strategies.map((strategy) => (
-                        <span key={`${market.symbol}-${strategy.name}`} className={`state-pill strategy-state ${strategy.state}`}>
-                          {translateProfileLabel(strategy.label)} : {translateStateLabel(strategy.state)}
+                        <span key={`${market.symbol}-${strategy.name}`} className={`state-pill strategy-state ${strategy.state}`} style={{ borderColor: strategy.color || undefined }}>
+                          {formatProfileDisplay(translateProfileLabel(strategy.label), strategy.icon)} : {translateStateLabel(strategy.state)}
                         </span>
                       ))}
                     </div>

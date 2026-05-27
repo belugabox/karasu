@@ -5,6 +5,9 @@ export type MarketSortKey = 'priority' | 'score' | 'strategyScore' | 'convergenc
 export type StrategyEvaluation = {
   name: string
   label: string
+  description: string
+  icon: string
+  color: string
   state: string
   score: number
   reasons: string[]
@@ -47,6 +50,9 @@ export type StrategySignalStats = {
 export type StrategySignalHistory = {
   name: string
   label: string
+  description: string
+  icon: string
+  color: string
   stats: StrategySignalStats
   points: StrategySignalPoint[]
 }
@@ -169,6 +175,9 @@ export function normalizeStrategyEvaluation(raw: unknown): StrategyEvaluation {
   return {
     name: toStringValue(r.name ?? r.Name),
     label: toStringValue(r.label ?? r.Label),
+    description: toStringValue(r.description ?? r.Description),
+    icon: toStringValue(r.icon ?? r.Icon),
+    color: toStringValue(r.color ?? r.Color),
     state: toStringValue(r.state ?? r.State),
     score: toNumber(r.score ?? r.Score),
     reasons: normalizeStringArray(r.reasons ?? r.Reasons),
@@ -225,6 +234,9 @@ export function normalizeStrategySignalHistory(raw: unknown): StrategySignalHist
   return {
     name: toStringValue(r.name ?? r.Name),
     label: toStringValue(r.label ?? r.Label),
+    description: toStringValue(r.description ?? r.Description),
+    icon: toStringValue(r.icon ?? r.Icon),
+    color: toStringValue(r.color ?? r.Color),
     stats: normalizeStrategySignalStats(statsRaw),
     points: Array.isArray(pointsRaw) ? pointsRaw.map(normalizeStrategySignalPoint) : [],
   }

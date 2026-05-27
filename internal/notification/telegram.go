@@ -256,11 +256,23 @@ func (n *TelegramAlertNotifier) buildOpportunitiesResponse() (string, error) {
 		return "🎯 Opportunités\nAucune opportunité disponible pour le moment.", nil
 	}
 
-	lines := []string{"🎯 Opportunités prioritaires"}
+	lines := []string{
+		fmt.Sprintf("🎯 Opportunités prioritaires (top %d)", len(opportunities)),
+		"Lecture rapide: action | profil leader | contexte",
+	}
 	for i, opportunity := range opportunities {
+		leaderLabel := translateTelegramProfileLabel(opportunity.Leader.Label)
+		if icon := strings.TrimSpace(opportunity.Leader.Icon); icon != "" {
+			leaderLabel = icon + " " + leaderLabel
+		}
+		profileHint := compactTelegramProfileHint(opportunity.Leader.Label, opportunity.Leader.Description)
+
 		lines = append(lines,
-			fmt.Sprintf("%d. %s — %s — %s — score %s", i+1, opportunity.Symbol, translateTelegramPrimaryAction(opportunity.PrimaryAction), translateTelegramPriorityBand(opportunity.PriorityBand), formatTelegramNumber(opportunity.PriorityScore)),
-			fmt.Sprintf("   %s | leader %s en %s", translateTelegramSummary(opportunity.Summary), translateTelegramProfileLabel(opportunity.Leader.Label), translateTelegramState(opportunity.Leader.State)),
+			fmt.Sprintf("%d) %s | score %s", i+1, opportunity.Symbol, formatTelegramNumber(opportunity.PriorityScore)),
+			fmt.Sprintf("   action: %s (%s)", translateTelegramPrimaryAction(opportunity.PrimaryAction), translateTelegramPriorityBand(opportunity.PriorityBand)),
+			fmt.Sprintf("   leader: %s - %s", leaderLabel, translateTelegramState(opportunity.Leader.State)),
+			fmt.Sprintf("   contexte: %s", translateTelegramSummary(opportunity.Summary)),
+			fmt.Sprintf("   profil: %s", profileHint),
 		)
 	}
 
@@ -681,14 +693,35 @@ func translateTelegramState(state string) string {
 
 func translateTelegramProfileLabel(label string) string {
 	switch label {
-	case "Intraday Momentum":
-		return "momentum intraday"
-	case "Swing Balance":
-		return "swing équilibre"
-	case "Trend Follow":
-		return "suivi de tendance"
+	case "Pulse":
+		return "Pulse"
+	case "Balance":
+		return "Balance"
+	case "Trend":
+		return "Trend"
 	default:
 		return label
+	}
+}
+
+func translateTelegramProfileDescription(description string) string {
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return "profil sans description"
+	}
+	return description
+}
+
+func compactTelegramProfileHint(label, description string) string {
+	switch strings.TrimSpace(label) {
+	case "Pulse":
+		return "court terme reactif"
+	case "Balance":
+		return "equilibre swing"
+	case "Trend":
+		return "suivi de tendance long terme"
+	default:
+		return translateTelegramProfileDescription(description)
 	}
 }
 
