@@ -134,16 +134,18 @@ func toLiveCandle(symbol string, entry liveEntry) LiveCandle {
 
 // IngestionService orchestrates live candle ingestion and backfill.
 type IngestionService struct {
-	exchangeClient exchange.ExchangeClient
-	store          store.CandleStore
-	alertStore     store.AlertStore
-	alertNotifier  notification.AlertNotifier
-	liveCache      *LiveCache
-	otherBatchSize int
-	topSymbolsSize int
-	repairLookback time.Duration
-	backfillChunk  time.Duration
-	backfillMu     sync.Mutex
+	exchangeClient       exchange.ExchangeClient
+	store                store.CandleStore
+	alertStore           store.AlertStore
+	alertNotifier        notification.AlertNotifier
+	alertORMinScore      float64
+	alertUrgentMinReduce int
+	liveCache            *LiveCache
+	otherBatchSize       int
+	topSymbolsSize       int
+	repairLookback       time.Duration
+	backfillChunk        time.Duration
+	backfillMu           sync.Mutex
 
 	mu                    sync.RWMutex
 	allSymbols            []string
@@ -164,21 +166,49 @@ type IngestionService struct {
 
 func NewIngestionService(exchangeClient exchange.ExchangeClient, candleStore store.CandleStore) *IngestionService {
 	s := &IngestionService{
-		exchangeClient: exchangeClient,
-		store:          candleStore,
-		liveCache:      NewLiveCache(),
-		otherBatchSize: defaultOtherBatchSize,
-		topSymbolsSize: defaultTopSymbolsCount,
-		repairLookback: defaultRepairLookback,
-		backfillChunk:  defaultBackfillChunk,
-		allSymbols:     make([]string, 0),
-		topSymbols:     make([]string, 0),
-		backfillQueue:  make(chan backfillRequest, defaultBackfillQueue),
-		jobs:           make(map[string]BackfillJob),
-		alerts:         make(map[string]store.AlertEvent),
+		exchangeClient:       exchangeClient,
+		store:                candleStore,
+		liveCache:            NewLiveCache(),
+		otherBatchSize:       defaultOtherBatchSize,
+		topSymbolsSize:       defaultTopSymbolsCount,
+		repairLookback:       defaultRepairLookback,
+		backfillChunk:        defaultBackfillChunk,
+		alertORMinScore:      70,
+		alertUrgentMinReduce: 1,
+		allSymbols:           make([]string, 0),
+		topSymbols:           make([]string, 0),
+		backfillQueue:        make(chan backfillRequest, defaultBackfillQueue),
+		jobs:                 make(map[string]BackfillJob),
+		alerts:               make(map[string]store.AlertEvent),
 	}
 	s.startBackfillWorker()
 	return s
+}
+
+func (s *IngestionService) SetOpportunityAlertMinScore(score float64) error {
+	if score < 0 || score > 100 {
+		return fmt.Errorf("opportunity alert min score must be between 0 and 100")
+	}
+	s.mu.Lock()
+	s.alertORMinScore = score
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *IngestionService) SetUrgentDecisionMinReduce(count int) error {
+	if count < 1 {
+		return fmt.Errorf("urgent decision min reduce must be >= 1")
+	}
+	s.mu.Lock()
+	s.alertUrgentMinReduce = count
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *IngestionService) alertThresholds() (orMinScore float64, urgentMinReduce int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.alertORMinScore, s.alertUrgentMinReduce
 }
 
 // SetAlertStore wires a persistent AlertStore. When set, alerts are written to
@@ -945,7 +975,88 @@ func (s *IngestionService) IngestTopSymbols() error {
 	if len(symbols) == 0 {
 		return nil
 	}
-	return s.ingestSymbols(symbols)
+	if err := s.ingestSymbols(symbols); err != nil {
+		return err
+	}
+
+	// Emit business-level alerts after top ingestion so telegram users can act quickly.
+	s.emitOpportunityAndDecisionAlerts()
+
+	return nil
+}
+
+func (s *IngestionService) emitOpportunityAndDecisionAlerts() {
+	if s.exchangeClient == nil || s.store == nil {
+		return
+	}
+
+	orMinScore, urgentMinReduce := s.alertThresholds()
+
+	opportunities, err := market.TopOpportunities(s.exchangeClient, s.store, 10)
+	if err != nil {
+		slog.Warn("failed to evaluate opportunity alerts", "err", err)
+		return
+	}
+
+	orSymbols := make([]string, 0, 3)
+	for _, opportunity := range opportunities {
+		if opportunity.PriorityBand != "actionable" {
+			continue
+		}
+		if opportunity.PriorityScore < orMinScore {
+			continue
+		}
+		if opportunity.PrimaryAction != "act-now" && !opportunity.Freshness.HasFreshEntry {
+			continue
+		}
+		orSymbols = append(orSymbols, strings.ToUpper(opportunity.Symbol))
+		if len(orSymbols) >= 3 {
+			break
+		}
+	}
+
+	if len(orSymbols) > 0 {
+		s.recordAlert(
+			"opportunity:gold",
+			"opportunity",
+			store.AlertSeverityInfo,
+			fmt.Sprintf("opportunites OR detectees: %s", strings.Join(orSymbols, ", ")),
+			"opportunity-engine",
+			"",
+		)
+	} else {
+		s.resolveAlert("opportunity:gold", "opportunity", "opportunity-engine")
+	}
+
+	wallet, err := s.exchangeClient.Wallet()
+	if err != nil {
+		slog.Warn("failed to evaluate urgent decision alerts", "err", err)
+		return
+	}
+
+	decision := market.BuildWalletDecision(wallet, opportunities)
+	if decision.HasSellSignal && len(decision.Reduce) >= urgentMinReduce {
+		reduceSymbols := make([]string, 0, min(5, len(decision.Reduce)))
+		for _, item := range decision.Reduce[:min(5, len(decision.Reduce))] {
+			reduceSymbols = append(reduceSymbols, item.Symbol)
+		}
+
+		message := fmt.Sprintf("decision urgente: alleger %d position(s)", len(decision.Reduce))
+		if len(reduceSymbols) > 0 {
+			message = fmt.Sprintf("%s (%s)", message, strings.Join(reduceSymbols, ", "))
+		}
+
+		s.recordAlert(
+			"decision:urgent:sell",
+			"decision",
+			store.AlertSeverityCritical,
+			message,
+			"decision-engine",
+			"",
+		)
+	} else {
+		s.resolveAlert("decision:urgent:sell", "decision", "decision-engine")
+	}
 }
 
 func (s *IngestionService) IngestOtherSymbols() error {

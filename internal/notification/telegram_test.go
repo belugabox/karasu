@@ -13,7 +13,11 @@ import (
 
 	"karasu/internal/exchange"
 	"karasu/internal/store"
+
+	"github.com/mymmrac/telego"
 )
+
+const telegramValidTestToken = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcde1234"
 
 func TestNewTelegramAlertNotifierRequiresBotTokenAndChatID(t *testing.T) {
 	t.Parallel()
@@ -33,8 +37,8 @@ func TestTelegramAlertNotifierNotifyAlert(t *testing.T) {
 	var gotContentType string
 	var handlerErr error
 	var payload struct {
-		ChatID string `json:"chat_id"`
-		Text   string `json:"text"`
+		ChatID json.RawMessage `json:"chat_id"`
+		Text   string          `json:"text"`
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -53,16 +57,24 @@ func TestTelegramAlertNotifierNotifyAlert(t *testing.T) {
 			return
 		}
 
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true,"result":{"message_id":1,"date":0,"chat":{"id":456,"type":"private"},"text":"ok"}}`)
 	}))
 	defer server.Close()
 
-	notifier, err := NewTelegramAlertNotifier("token-123", "chat-456")
+	notifier, err := NewTelegramAlertNotifier(telegramValidTestToken, "456")
 	if err != nil {
 		t.Fatalf("failed to create notifier: %v", err)
 	}
-	notifier.client = server.Client()
-	notifier.baseURL = server.URL
+	bot, err := telego.NewBot(
+		telegramValidTestToken,
+		telego.WithHTTPClient(server.Client()),
+		telego.WithAPIServer(server.URL),
+	)
+	if err != nil {
+		t.Fatalf("failed to create telego bot: %v", err)
+	}
+	notifier.bot = bot
 
 	alert := store.AlertEvent{
 		ID:        "al_1",
@@ -85,14 +97,14 @@ func TestTelegramAlertNotifierNotifyAlert(t *testing.T) {
 		t.Fatalf("handler returned error: %v", handlerErr)
 	}
 
-	if gotPath != "/bottoken-123/sendMessage" {
+	if gotPath != "/bot"+telegramValidTestToken+"/sendMessage" {
 		t.Fatalf("unexpected path %q", gotPath)
 	}
 	if gotContentType != "application/json" {
 		t.Fatalf("unexpected content-type %q", gotContentType)
 	}
-	if payload.ChatID != "chat-456" {
-		t.Fatalf("unexpected chat_id %q", payload.ChatID)
+	if strings.TrimSpace(string(payload.ChatID)) != "456" {
+		t.Fatalf("unexpected chat_id %s", string(payload.ChatID))
 	}
 	if !strings.Contains(payload.Text, "Karasu ALERTE ACTIVE") {
 		t.Fatalf("expected active alert title, got %q", payload.Text)
@@ -111,10 +123,10 @@ func TestTelegramAlertNotifierPollOnceRepliesToSupportedCommands(t *testing.T) {
 	sentMessages := make([]string, 0)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/bottoken-123/getUpdates":
+		case "/bot" + telegramValidTestToken + "/getUpdates":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"ok":true,"result":[{"update_id":11,"message":{"chat":{"id":456},"text":"/wallet"}},{"update_id":12,"message":{"chat":{"id":456},"text":"/opportunities"}},{"update_id":13,"message":{"chat":{"id":456},"text":"/decision"}}]}`)
-		case "/bottoken-123/sendMessage":
+		case "/bot" + telegramValidTestToken + "/sendMessage":
 			var payload struct {
 				Text string `json:"text"`
 			}
@@ -122,19 +134,27 @@ func TestTelegramAlertNotifierPollOnceRepliesToSupportedCommands(t *testing.T) {
 				t.Fatalf("failed to decode sendMessage payload: %v", err)
 			}
 			sentMessages = append(sentMessages, payload.Text)
-			w.WriteHeader(http.StatusOK)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"ok":true,"result":{"message_id":2,"date":0,"chat":{"id":456,"type":"private"},"text":"ok"}}`)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
 	}))
 	defer server.Close()
 
-	notifier, err := NewTelegramAlertNotifier("token-123", "456")
+	notifier, err := NewTelegramAlertNotifier(telegramValidTestToken, "456")
 	if err != nil {
 		t.Fatalf("failed to create notifier: %v", err)
 	}
-	notifier.baseURL = server.URL
-	notifier.client = server.Client()
+	bot, err := telego.NewBot(
+		telegramValidTestToken,
+		telego.WithHTTPClient(server.Client()),
+		telego.WithAPIServer(server.URL),
+	)
+	if err != nil {
+		t.Fatalf("failed to create telego bot: %v", err)
+	}
+	notifier.bot = bot
 	notifier.SetCommandSources(
 		telegramTestExchangeClient{
 			wallet: exchange.Wallet{
@@ -185,17 +205,24 @@ func TestTelegramAlertNotifierPollOnceRepliesToSupportedCommands(t *testing.T) {
 func TestTelegramAlertNotifierRedactsTokenFromHTTPClientErrors(t *testing.T) {
 	t.Parallel()
 
-	notifier, err := NewTelegramAlertNotifier("token-123", "456")
+	notifier, err := NewTelegramAlertNotifier(telegramValidTestToken, "456")
 	if err != nil {
 		t.Fatalf("failed to create notifier: %v", err)
 	}
-	notifier.client = &http.Client{Transport: telegramErrorTransport{}}
+	bot, err := telego.NewBot(
+		telegramValidTestToken,
+		telego.WithHTTPClient(&http.Client{Transport: telegramErrorTransport{}}),
+	)
+	if err != nil {
+		t.Fatalf("failed to create telego bot: %v", err)
+	}
+	notifier.bot = bot
 
 	sendErr := notifier.sendText(context.Background(), "456", "hello")
 	if sendErr == nil {
 		t.Fatal("expected sendText to return an error")
 	}
-	if strings.Contains(sendErr.Error(), "token-123") {
+	if strings.Contains(sendErr.Error(), telegramValidTestToken) {
 		t.Fatalf("expected sendText error to redact bot token, got %q", sendErr)
 	}
 
@@ -203,7 +230,7 @@ func TestTelegramAlertNotifierRedactsTokenFromHTTPClientErrors(t *testing.T) {
 	if pollErr == nil {
 		t.Fatal("expected getUpdates to return an error")
 	}
-	if strings.Contains(pollErr.Error(), "token-123") {
+	if strings.Contains(pollErr.Error(), telegramValidTestToken) {
 		t.Fatalf("expected getUpdates error to redact bot token, got %q", pollErr)
 	}
 }

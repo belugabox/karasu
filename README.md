@@ -83,11 +83,14 @@ Variable d'environnement:
 
 - `KARASU_DB_PATH` (optionnel, defaut: `./karasu.db`)
 - `KARASU_TELEGRAM_BOT_TOKEN` + `KARASU_TELEGRAM_CHAT_ID` (optionnels, activent l'envoi des alertes dédoublonnées vers Telegram)
+- `KARASU_TELEGRAM_ALERTS_ENABLED` (optionnel, defaut: `false`, active l'envoi automatique des alertes Telegram)
 - `KARASU_REFRESH_UNIVERSE_INTERVAL` (optionnel, defaut: `15m`)
 - `KARASU_INGEST_TOP_INTERVAL` (optionnel, defaut: `1m`)
 - `KARASU_INGEST_OTHER_INTERVAL` (optionnel, defaut: `5m`)
 - `KARASU_INGEST_REPAIR_LOOKBACK` (optionnel, defaut: `6h`)
 - `KARASU_BACKFILL_CHUNK` (optionnel, defaut: `12h`)
+- `KARASU_ALERT_OPPORTUNITY_OR_MIN_SCORE` (optionnel, defaut: `70`)
+- `KARASU_ALERT_DECISION_URGENT_MIN_REDUCE` (optionnel, defaut: `1`)
 
 Les durees utilisent le format Go (`30s`, `1m`, `5m`, `1h`).
 
@@ -121,7 +124,10 @@ Les durees utilisent le format Go (`30s`, `1m`, `5m`, `1h`).
 
 ## Telegram
 
-Si `KARASU_TELEGRAM_BOT_TOKEN` et `KARASU_TELEGRAM_CHAT_ID` sont renseignés, Karasu pousse les transitions d'alertes dédoublonnées vers Telegram :
+Si `KARASU_TELEGRAM_BOT_TOKEN` et `KARASU_TELEGRAM_CHAT_ID` sont renseignés, Karasu active le bot Telegram (commandes).
+L'envoi automatique des alertes est activé uniquement si `KARASU_TELEGRAM_ALERTS_ENABLED=true`.
+
+Quand l'envoi automatique est activé, Karasu pousse les transitions d'alertes dédoublonnées vers Telegram :
 
 - apparition d'une nouvelle alerte
 - changement de sévérité, message, source ou symbole

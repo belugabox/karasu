@@ -1,14 +1,10 @@
 package notification
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +13,9 @@ import (
 	"karasu/internal/exchange"
 	"karasu/internal/market"
 	"karasu/internal/store"
+
+	"github.com/mymmrac/telego"
+	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 const (
@@ -25,11 +24,17 @@ const (
 	defaultTelegramCommandListLimit = 5
 )
 
+const (
+	telegramCommandWallet        = "/wallet"
+	telegramCommandOpportunities = "/opportunities"
+	telegramCommandDecision      = "/decision"
+	telegramCommandHelp          = "/help"
+)
+
 type TelegramAlertNotifier struct {
 	botToken       string
 	chatID         string
-	baseURL        string
-	client         *http.Client
+	bot            *telego.Bot
 	exchangeClient exchange.ExchangeClient
 	candleStore    store.CandleStore
 	nextUpdateID   int64
@@ -46,11 +51,18 @@ func NewTelegramAlertNotifier(botToken, chatID string) (*TelegramAlertNotifier, 
 		return nil, fmt.Errorf("telegram chat id is required")
 	}
 
+	bot, err := telego.NewBot(
+		botToken,
+		telego.WithHTTPClient(&http.Client{Timeout: defaultTelegramTimeout}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize telegram bot: %w", err)
+	}
+
 	return &TelegramAlertNotifier{
 		botToken: botToken,
 		chatID:   chatID,
-		baseURL:  "https://api.telegram.org",
-		client:   &http.Client{Timeout: defaultTelegramTimeout},
+		bot:      bot,
 	}, nil
 }
 
@@ -100,8 +112,9 @@ func (n *TelegramAlertNotifier) pollOnce(ctx context.Context) error {
 	}
 
 	for _, update := range updates {
-		if update.UpdateID >= n.nextUpdateID {
-			n.nextUpdateID = update.UpdateID + 1
+		updateID := int64(update.UpdateID)
+		if updateID >= n.nextUpdateID {
+			n.nextUpdateID = updateID + 1
 		}
 		if update.Message == nil {
 			continue
@@ -127,34 +140,56 @@ func (n *TelegramAlertNotifier) pollOnce(ctx context.Context) error {
 }
 
 func (n *TelegramAlertNotifier) commandResponse(message string) (string, bool, error) {
-	fields := strings.Fields(strings.TrimSpace(message))
-	if len(fields) == 0 {
-		return "", false, nil
+	command, ok := normalizeTelegramCommand(message)
+	if !ok {
+		return telegramQuickRepliesMessage(), true, nil
 	}
 
-	command := strings.ToLower(fields[0])
+	switch command {
+	case telegramCommandWallet:
+		response, err := n.buildWalletResponse()
+		return response, true, err
+	case telegramCommandOpportunities:
+		response, err := n.buildOpportunitiesResponse()
+		return response, true, err
+	case telegramCommandDecision:
+		response, err := n.buildDecisionResponse()
+		return response, true, err
+	case telegramCommandHelp:
+		return telegramHelpMessage(), true, nil
+	default:
+		return telegramQuickRepliesMessage(), true, nil
+	}
+}
+
+func normalizeTelegramCommand(message string) (string, bool) {
+	fields := strings.Fields(strings.TrimSpace(strings.ToLower(message)))
+	if len(fields) == 0 {
+		return "", false
+	}
+
+	command := fields[0]
 	if idx := strings.Index(command, "@"); idx >= 0 {
 		command = command[:idx]
 	}
 
-	switch command {
-	case "/wallet":
-		response, err := n.buildWalletResponse()
-		return response, true, err
-	case "/opportunities":
-		response, err := n.buildOpportunitiesResponse()
-		return response, true, err
-	case "/decision":
-		response, err := n.buildDecisionResponse()
-		return response, true, err
-	case "/start", "/help":
-		return telegramHelpMessage(), true, nil
-	default:
-		if strings.HasPrefix(command, "/") {
-			return telegramHelpMessage(), true, nil
-		}
-		return "", false, nil
+	alias := map[string]string{
+		"/start":                     telegramCommandHelp,
+		telegramCommandHelp:          telegramCommandHelp,
+		telegramCommandWallet:        telegramCommandWallet,
+		telegramCommandOpportunities: telegramCommandOpportunities,
+		telegramCommandDecision:      telegramCommandDecision,
+		"wallet":                     telegramCommandWallet,
+		"portefeuille":               telegramCommandWallet,
+		"opportunites":               telegramCommandOpportunities,
+		"opportunities":              telegramCommandOpportunities,
+		"scanner":                    telegramCommandOpportunities,
+		"decision":                   telegramCommandDecision,
+		"vendre":                     telegramCommandDecision,
 	}
+
+	normalized, ok := alias[command]
+	return normalized, ok
 }
 
 func (n *TelegramAlertNotifier) buildWalletResponse() (string, error) {
@@ -255,76 +290,73 @@ func (n *TelegramAlertNotifier) buildDecisionResponse() (string, error) {
 }
 
 func (n *TelegramAlertNotifier) sendText(ctx context.Context, chatID, text string) error {
-	body, err := json.Marshal(map[string]any{
-		"chat_id": chatID,
-		"text":    text,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to marshal telegram payload: %w", err)
+	if n == nil || n.bot == nil {
+		return fmt.Errorf("telegram notifier is nil")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.sendMessageEndpoint(), bytes.NewReader(body))
+	telegramChatID, err := telegramChatIDFromString(chatID)
 	if err != nil {
-		return fmt.Errorf("failed to create telegram request: %w", err)
+		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := n.client.Do(req)
+	msg := tu.Message(telegramChatID, text).WithReplyMarkup(telegramQuickReplyKeyboard())
+
+	_, err = n.bot.SendMessage(ctx, msg)
 	if err != nil {
 		return fmt.Errorf("failed to send telegram alert: %s", n.redactSensitiveError(err))
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		if readErr != nil {
-			return fmt.Errorf("telegram send failed: status=%d read_body_err=%w", resp.StatusCode, readErr)
-		}
-		return fmt.Errorf("telegram send failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
 	}
 
 	return nil
 }
 
-func (n *TelegramAlertNotifier) getUpdates(ctx context.Context) ([]telegramUpdate, error) {
-	query := url.Values{}
-	query.Set("timeout", strconv.FormatInt(int64(defaultTelegramLongPollTimeout/time.Second), 10))
+func telegramQuickReplyKeyboard() *telego.ReplyKeyboardMarkup {
+	keyboard := tu.Keyboard(
+		tu.KeyboardRow(
+			tu.KeyboardButton("wallet"),
+			tu.KeyboardButton("opportunites"),
+			tu.KeyboardButton("decision"),
+		),
+	).WithResizeKeyboard().WithInputFieldPlaceholder("Choisis une action rapide")
+
+	return keyboard
+}
+
+func (n *TelegramAlertNotifier) getUpdates(ctx context.Context) ([]telego.Update, error) {
+	if n == nil || n.bot == nil {
+		return nil, fmt.Errorf("telegram notifier is nil")
+	}
+
+	params := &telego.GetUpdatesParams{
+		Timeout: int(defaultTelegramLongPollTimeout / time.Second),
+	}
 	if n.nextUpdateID > 0 {
-		query.Set("offset", strconv.FormatInt(n.nextUpdateID, 10))
+		params.Offset = int(n.nextUpdateID)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, n.getUpdatesEndpoint()+"?"+query.Encode(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create telegram getUpdates request: %w", err)
-	}
-
-	resp, err := n.client.Do(req)
+	updates, err := n.bot.GetUpdates(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to poll telegram updates: %s", n.redactSensitiveError(err))
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		if readErr != nil {
-			return nil, fmt.Errorf("telegram poll failed: status=%d read_body_err=%w", resp.StatusCode, readErr)
-		}
-		return nil, fmt.Errorf("telegram poll failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
-	}
-
-	var payload telegramGetUpdatesResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("failed to decode telegram updates: %w", err)
-	}
-	return payload.Result, nil
+	return updates, nil
 }
 
-func (n *TelegramAlertNotifier) sendMessageEndpoint() string {
-	return fmt.Sprintf("%s/bot%s/sendMessage", strings.TrimRight(n.baseURL, "/"), n.botToken)
-}
+func telegramChatIDFromString(value string) (telego.ChatID, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return telego.ChatID{}, fmt.Errorf("telegram chat id is required")
+	}
 
-func (n *TelegramAlertNotifier) getUpdatesEndpoint() string {
-	return fmt.Sprintf("%s/bot%s/getUpdates", strings.TrimRight(n.baseURL, "/"), n.botToken)
+	if strings.HasPrefix(trimmed, "@") {
+		return tu.Username(trimmed), nil
+	}
+
+	id, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil {
+		return telego.ChatID{}, fmt.Errorf("invalid telegram chat id %q: %w", trimmed, err)
+	}
+
+	return tu.ID(id), nil
 }
 
 func (n *TelegramAlertNotifier) redactSensitiveError(err error) string {
@@ -341,11 +373,18 @@ func (n *TelegramAlertNotifier) redactSensitiveError(err error) string {
 }
 
 func formatTelegramAlert(alert store.AlertEvent) string {
+	statusLabel := telegramAlertState(alert)
+	severityLabel := translateTelegramSeverity(alert.Severity)
+	categoryLabel := translateTelegramCategory(alert.Category)
+	sourceLabel := translateTelegramSource(alert.Source)
+	seenLabel := formatTelegramAlertSeenRange(alert.FirstSeen, alert.LastSeen)
+	actionLabel := telegramAlertActionHint(alert)
+
 	lines := []string{
-		fmt.Sprintf("%s Karasu %s", telegramAlertPrefix(alert), telegramAlertState(alert)),
-		fmt.Sprintf("Catégorie: %s", alert.Category),
-		fmt.Sprintf("Sévérité: %s", alert.Severity),
-		fmt.Sprintf("Source: %s", alert.Source),
+		fmt.Sprintf("%s Karasu %s", telegramAlertPrefix(alert), statusLabel),
+		fmt.Sprintf("Niveau: %s", severityLabel),
+		fmt.Sprintf("Type: %s", categoryLabel),
+		fmt.Sprintf("Origine: %s", sourceLabel),
 	}
 
 	if symbol := strings.TrimSpace(alert.Symbol); symbol != "" {
@@ -354,13 +393,119 @@ func formatTelegramAlert(alert store.AlertEvent) string {
 
 	lines = append(
 		lines,
-		fmt.Sprintf("Message: %s", alert.Message),
+		fmt.Sprintf("Détail: %s", strings.TrimSpace(alert.Message)),
 		fmt.Sprintf("Occurrences: %d", alert.Count),
-		fmt.Sprintf("Première apparition: %s", alert.FirstSeen.UTC().Format(time.RFC3339)),
-		fmt.Sprintf("Dernière apparition: %s", alert.LastSeen.UTC().Format(time.RFC3339)),
+		fmt.Sprintf("Période: %s", seenLabel),
+		fmt.Sprintf("Action recommandée: %s", actionLabel),
 	)
 
 	return strings.Join(lines, "\n")
+}
+
+func formatTelegramAlertSeenRange(firstSeen, lastSeen time.Time) string {
+	if firstSeen.IsZero() && lastSeen.IsZero() {
+		return "inconnue"
+	}
+
+	if firstSeen.IsZero() {
+		return fmt.Sprintf("dernier signal %s", formatTelegramAlertTime(lastSeen))
+	}
+
+	if lastSeen.IsZero() || lastSeen.Equal(firstSeen) {
+		return fmt.Sprintf("signal unique à %s", formatTelegramAlertTime(firstSeen))
+	}
+
+	return fmt.Sprintf("%s -> %s", formatTelegramAlertTime(firstSeen), formatTelegramAlertTime(lastSeen))
+}
+
+func formatTelegramAlertTime(ts time.Time) string {
+	if ts.IsZero() {
+		return "inconnue"
+	}
+	return ts.UTC().Format("2006-01-02 15:04:05 UTC")
+}
+
+func translateTelegramSeverity(severity store.AlertSeverity) string {
+	switch severity {
+	case store.AlertSeverityCritical:
+		return "critique"
+	case store.AlertSeverityWarning:
+		return "alerte"
+	default:
+		return "information"
+	}
+}
+
+func translateTelegramCategory(category string) string {
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case "exchange":
+		return "exchange"
+	case "health":
+		return "sante systeme"
+	case "backfill":
+		return "rattrapage historique"
+	case "opportunity":
+		return "opportunites OR"
+	case "decision":
+		return "decision portefeuille"
+	default:
+		if category == "" {
+			return "non precise"
+		}
+		return category
+	}
+}
+
+func translateTelegramSource(source string) string {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "exchange":
+		return "flux exchange"
+	case "system-health":
+		return "controle de sante"
+	case "backfill-worker", "backfill":
+		return "worker backfill"
+	case "opportunity-engine":
+		return "moteur opportunites"
+	case "decision-engine":
+		return "moteur decision"
+	default:
+		if source == "" {
+			return "non precisee"
+		}
+		return source
+	}
+}
+
+func telegramAlertActionHint(alert store.AlertEvent) string {
+	if !alert.Active {
+		return "aucune action urgente, surveiller recurrence"
+	}
+
+	category := strings.ToLower(strings.TrimSpace(alert.Category))
+	if category == "exchange" {
+		return "reduire la frequence d ingestion et verifier la connectivite exchange"
+	}
+	if category == "health" {
+		return "verifier la fraicheur des donnees et l etat du scheduler"
+	}
+	if category == "backfill" {
+		return "inspecter la queue de backfill et relancer un job si necessaire"
+	}
+	if category == "opportunity" {
+		return "verifier /opportunities et prioriser les entrees fraiches"
+	}
+	if category == "decision" {
+		return "ouvrir /decision et evaluer un allegement immediat"
+	}
+
+	if alert.Severity == store.AlertSeverityCritical {
+		return "intervention recommandee rapidement"
+	}
+	if alert.Severity == store.AlertSeverityWarning {
+		return "surveillance rapprochee"
+	}
+
+	return "information de contexte"
 }
 
 func telegramAlertPrefix(alert store.AlertEvent) string {
@@ -385,26 +530,12 @@ func telegramAlertState(alert store.AlertEvent) string {
 	return "ALERTE RESOLUE"
 }
 
-type telegramGetUpdatesResponse struct {
-	Result []telegramUpdate `json:"result"`
-}
-
-type telegramUpdate struct {
-	UpdateID int64            `json:"update_id"`
-	Message  *telegramMessage `json:"message"`
-}
-
-type telegramMessage struct {
-	Text string       `json:"text"`
-	Chat telegramChat `json:"chat"`
-}
-
-type telegramChat struct {
-	ID int64 `json:"id"`
-}
-
 func telegramHelpMessage() string {
-	return "Commandes disponibles:\n/wallet\n/opportunities\n/decision"
+	return "Commandes disponibles:\n/wallet\n/opportunities\n/decision\n\n" + telegramQuickRepliesMessage()
+}
+
+func telegramQuickRepliesMessage() string {
+	return "Réponses rapides:\n- wallet\n- opportunites\n- decision\n\nTu peux aussi utiliser /help"
 }
 
 func translateTelegramPrimaryAction(action string) string {

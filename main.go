@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -53,14 +54,24 @@ func main() {
 
 	ingestionService := ingestion.NewIngestionService(exchangeClient, candleStore)
 	ingestionService.SetAlertStore(candleStore)
+	telegramAlertsEnabled, err := boolFromEnv("KARASU_TELEGRAM_ALERTS_ENABLED", false)
+	if err != nil {
+		slog.Error("invalid telegram setting", "env", "KARASU_TELEGRAM_ALERTS_ENABLED", "err", err)
+		return
+	}
 	if telegramNotifier, err := telegramNotifierFromEnv(); err != nil {
 		slog.Error("failed to configure telegram notifier", "err", err)
 		return
 	} else if telegramNotifier != nil {
 		telegramNotifier.SetCommandSources(exchangeClient, candleStore)
-		ingestionService.SetAlertNotifier(telegramNotifier)
+		if telegramAlertsEnabled {
+			ingestionService.SetAlertNotifier(telegramNotifier)
+			slog.Info("telegram alert forwarding enabled")
+		} else {
+			slog.Info("telegram alert forwarding disabled", "env", "KARASU_TELEGRAM_ALERTS_ENABLED")
+		}
 		go telegramNotifier.Run(ctx)
-		slog.Info("telegram alert notifier enabled")
+		slog.Info("telegram bot commands enabled")
 	}
 	if err := ingestionService.RefreshUniverse(); err != nil {
 		slog.Warn("initial universe refresh failed", "err", err)
@@ -96,12 +107,30 @@ func main() {
 		slog.Error("invalid ingestion setting", "env", "KARASU_BACKFILL_CHUNK", "err", err)
 		return
 	}
+	alertORMinScore, err := floatFromEnv("KARASU_ALERT_OPPORTUNITY_OR_MIN_SCORE", 70)
+	if err != nil {
+		slog.Error("invalid alert setting", "env", "KARASU_ALERT_OPPORTUNITY_OR_MIN_SCORE", "err", err)
+		return
+	}
+	alertUrgentMinReduce, err := intFromEnv("KARASU_ALERT_DECISION_URGENT_MIN_REDUCE", 1)
+	if err != nil {
+		slog.Error("invalid alert setting", "env", "KARASU_ALERT_DECISION_URGENT_MIN_REDUCE", "err", err)
+		return
+	}
 	if err := ingestionService.SetRepairLookback(repairLookback); err != nil {
 		slog.Error("failed to configure ingestion repair lookback", "err", err)
 		return
 	}
 	if err := ingestionService.SetBackfillChunk(backfillChunk); err != nil {
 		slog.Error("failed to configure backfill chunk", "err", err)
+		return
+	}
+	if err := ingestionService.SetOpportunityAlertMinScore(alertORMinScore); err != nil {
+		slog.Error("failed to configure opportunity OR alert threshold", "err", err)
+		return
+	}
+	if err := ingestionService.SetUrgentDecisionMinReduce(alertUrgentMinReduce); err != nil {
+		slog.Error("failed to configure urgent decision alert threshold", "err", err)
 		return
 	}
 
@@ -134,6 +163,8 @@ func main() {
 		"repairGaps", gapRepairInterval.String(),
 		"repairLookback", repairLookback.String(),
 		"backfillChunk", backfillChunk.String(),
+		"alertORMinScore", alertORMinScore,
+		"alertUrgentMinReduce", alertUrgentMinReduce,
 	)
 	defer s.Stop()
 	s.Start()
@@ -146,6 +177,48 @@ func main() {
 		slog.Error("application runtime error", "err", err)
 		return
 	}
+}
+
+func floatFromEnv(envName string, defaultValue float64) (float64, error) {
+	raw := strings.TrimSpace(os.Getenv(envName))
+	if raw == "" {
+		return defaultValue, nil
+	}
+
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a valid number: %w", envName, err)
+	}
+
+	return parsed, nil
+}
+
+func intFromEnv(envName string, defaultValue int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(envName))
+	if raw == "" {
+		return defaultValue, nil
+	}
+
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a valid integer: %w", envName, err)
+	}
+
+	return parsed, nil
+}
+
+func boolFromEnv(envName string, defaultValue bool) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(envName))
+	if raw == "" {
+		return defaultValue, nil
+	}
+
+	parsed, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s must be a valid boolean (true/false): %w", envName, err)
+	}
+
+	return parsed, nil
 }
 
 func durationFromEnv(envName string, defaultValue time.Duration) (time.Duration, error) {
